@@ -110,7 +110,7 @@ fn mine_gold(mut resources: Resources) -> Resources {
 
 fn mine_gems(mut resources: Resources) -> Resources {
     if rand::thread_rng().gen_bool(0.5) { 
-        *resources.entry("gems").or_insert(0) += 1;
+        *resources.entry("gem").or_insert(0) += 1;
     }
     resources
 }
