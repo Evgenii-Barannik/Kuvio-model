@@ -1,15 +1,15 @@
 #[macro_use]
 extern crate lazy_static;
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use rand::distributions::{Distribution, WeightedIndex};
-use rand::thread_rng;
-use rand::Rng;
+use rand::{Rng, rngs::StdRng, SeedableRng};
 
 const RESOURCE_BIAS: f64 = 1.0;
+const SEED: [u8; 32] = [2; 32];
 lazy_static! {
-    static ref RESOURCE_WEIGHTS: HashMap<&'static str, f64> = {
-        let mut m = HashMap::new();
+    static ref RESOURCE_WEIGHTS: BTreeMap<&'static str, f64> = {
+        let mut m = BTreeMap::new();
         m.insert("gold", 1.0);
         m.insert("wood", 1.0);
         m.insert("ore", 1.0);
@@ -21,31 +21,24 @@ lazy_static! {
     };
 }
 
-type Resources<'a> = HashMap<&'a str, u32>;
-type Behaviour<'a> = fn(Resources<'a>) -> Resources<'a>; 
+type Resources<'a> = BTreeMap<&'a str, u32>;
+type Behaviour<'a> = fn(Resources<'a>, &mut StdRng) -> Resources<'a>;
+type BehaviourProbs<'a> = Vec<(Behaviour<'a>, f64)>;
 
 #[derive(Debug, Default)]
 struct Actor<'a> {
-    name: &'a str,
+    id: &'a str,
     resources: Resources<'a>,
-    behaviours: HashMap<Behaviour<'a>, f64> 
+    behaviours: BehaviourProbs<'a>,
 } 
 
 impl<'a> Actor<'a> {
-    fn new(
-        actor_name: &'a str,
-        initial_resources: Resources<'a>,
-        initial_behaviours: HashMap<Behaviour<'a>, f64>
-    ) -> Actor<'a> { 
-        Actor {
-            name: actor_name,
-            resources: initial_resources,
-            behaviours: initial_behaviours
-        }
+    fn new(id: &'a str, resources: Resources<'a>, behaviours: BehaviourProbs<'a>) -> Actor<'a> {
+        Actor {id, resources, behaviours}
     }
 
     fn get_resource(&self, resource_name: &str) -> u32 {
-        *self.resources.get(resource_name).unwrap_or(&0)
+       *self.resources.get(resource_name).unwrap_or(&0)
     }
 
     fn update_resources(&mut self, changes: Resources<'a>) {
@@ -60,14 +53,14 @@ impl<'a> Actor<'a> {
 
         if !updates_for_printing.is_empty() {
             let updates_str = updates_for_printing.join("\n");
-            println!("Resource changes for {}:\n{}\n", self.name, updates_str);
+            println!("Resource changes for {}:\n{}\n", self.id, updates_str);
         }
     }
 
     fn add_to_resource(&mut self, name: &'a str, amount_to_add: u32) {
         let old_amount = self.get_resource(name);
         let new_amount = old_amount + amount_to_add;
-        let change = HashMap::from([(name, new_amount)]);
+        let change = BTreeMap::from([(name, new_amount)]);
         self.update_resources(change);
     }
 
@@ -85,50 +78,49 @@ impl<'a> Actor<'a> {
     }
     
     fn print_resources(&self) {
-        println!("Resources for {}:\n{:?}\nUtility: {:.4}\n", &self.name, &self.resources, &self.utility());
+        println!("Resources for {}:\n{:?}\nUtility: {:.4}\n", &self.id, &self.resources, &self.utility());
     }
 
-    fn execute_action_randomly(&mut self) {
-        let behaviours: Vec<_> = self.behaviours.keys().collect();
-        let weights: Vec<_> = self.behaviours.values().cloned().collect();
+    fn execute_action(&mut self, rng: &mut StdRng) {
+        let (behaviours, probabilities): (Vec<Behaviour>, Vec<f64>) = 
+        self.behaviours
+        .iter()
+        .cloned()
+        .unzip();
 
-        let weighted_dist = WeightedIndex::new(&weights).unwrap();
-        let mut rng = thread_rng();
-
-        let chosen_behaviour = behaviours[weighted_dist.sample(&mut rng)];
-        let new_resources = chosen_behaviour(self.resources.clone());
+        let weighted_dist = WeightedIndex::new(&probabilities).unwrap();
+        let chosen_behaviour = behaviours[weighted_dist.sample(rng)];
+        let new_resources = chosen_behaviour(self.resources.clone(), rng);
 
         self.update_resources(new_resources);
     }
 }
 
 
-fn mine_gold(mut resources: Resources) -> Resources {
+fn mine_gold<'a>(mut resources: Resources<'a>, _: &mut StdRng) -> Resources<'a> {
     *resources.entry("gold").or_insert(0) += 1;
     resources
 }
 
-fn mine_gems(mut resources: Resources) -> Resources {
-    if rand::thread_rng().gen_bool(0.5) { 
+fn mine_gems<'a>(mut resources: Resources<'a>, rng: &mut StdRng) -> Resources<'a> {
+    if rng.gen_bool(0.5) { 
         *resources.entry("gem").or_insert(0) += 1;
     }
     resources
 }
 
-
 fn main() {
-    let mut gems_strategy = HashMap::new();
-    gems_strategy.insert(mine_gems as Behaviour, 1.0);
-    let mut alice = Actor::new("Alice", HashMap::new(), gems_strategy);
-
-    let mut gems_and_gold_strategy = HashMap::new();
-    gems_and_gold_strategy.insert(mine_gems as Behaviour, 0.8);
-    gems_and_gold_strategy.insert(mine_gold as Behaviour, 0.2);
-    let mut bob = Actor::new("Bob", HashMap::new(), gems_and_gold_strategy);
+    let mut r = StdRng::from_seed(SEED);
+    
+    let alice_behaviours: Vec<(Behaviour, f64)> = vec![(mine_gold as Behaviour,1.0)]; 
+    let mut alice = Actor::new("Alice", BTreeMap::new(), alice_behaviours);
+    
+    let bob_behaviours: Vec<(Behaviour, f64)> = vec![(mine_gold as Behaviour, 0.8), (mine_gems as Behaviour,0.2)]; 
+    let mut bob = Actor::new("Bob", BTreeMap::new(), bob_behaviours);
 
     for _ in 1..100 {
-        alice.execute_action_randomly();
-        bob.execute_action_randomly();
+        alice.execute_action(&mut r);
+        bob.execute_action(&mut r);
     }
 
     alice.print_resources();
