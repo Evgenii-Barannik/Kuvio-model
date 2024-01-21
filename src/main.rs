@@ -57,12 +57,12 @@ impl<'a> Actor<'a> {
         }
     }
 
-    fn add_to_resource(&mut self, name: &'a str, amount_to_add: u32) {
-        let old_amount = self.get_resource(name);
-        let new_amount = old_amount + amount_to_add;
-        let change = BTreeMap::from([(name, new_amount)]);
-        self.update_resources(change);
-    }
+    // fn add_to_resource(&mut self, name: &'a str, amount_to_add: u32) {
+    //     let old_amount = self.get_resource(name);
+    //     let new_amount = old_amount + amount_to_add;
+    //     let change = BTreeMap::from([(name, new_amount)]);
+    //     self.update_resources(change);
+    // }
 
     // We add RESOURCE_BIAS because without it resource change 0 -> 1 will not change utility.
     // It is so because ln(1.0) == 0.0.
@@ -96,6 +96,26 @@ impl<'a> Actor<'a> {
     }
 }
 
+struct Pallet<'a> {
+    actors: Vec<Actor<'a>>
+}
+
+impl<'a> Pallet<'a> {
+    fn new(actors: Vec<Actor<'a>>) -> Pallet<'a> {
+        Pallet{actors}
+    }
+    fn execute_actions_for_actors(&mut self, rng:&mut StdRng) {
+        for actor in &mut self.actors {
+            actor.execute_action(rng);
+        }
+    }
+
+    fn print_resources_for_actors(&self) {
+        for actor in &self.actors {
+            actor.print_resources();
+        }
+    }
+}
 
 fn mine_gold<'a>(mut resources: Resources<'a>, _: &mut StdRng) -> Resources<'a> {
     *resources.entry("gold").or_insert(0) += 1;
@@ -113,16 +133,16 @@ fn main() {
     let mut r = StdRng::from_seed(SEED);
     
     let alice_behaviours: Vec<(Behaviour, f64)> = vec![(mine_gold as Behaviour,1.0)]; 
-    let mut alice = Actor::new("Alice", BTreeMap::new(), alice_behaviours);
+    let alice = Actor::new("Alice", BTreeMap::new(), alice_behaviours);
     
     let bob_behaviours: Vec<(Behaviour, f64)> = vec![(mine_gold as Behaviour, 0.8), (mine_gems as Behaviour,0.2)]; 
-    let mut bob = Actor::new("Bob", BTreeMap::new(), bob_behaviours);
+    let bob = Actor::new("Bob", BTreeMap::new(), bob_behaviours);
+
+    let mut pallet = Pallet::new(vec![alice, bob]);
 
     for _ in 1..100 {
-        alice.execute_action(&mut r);
-        bob.execute_action(&mut r);
+        pallet.execute_actions_for_actors(&mut r);
     }
 
-    alice.print_resources();
-    bob.print_resources();
+    pallet.print_resources_for_actors();
 }
