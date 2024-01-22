@@ -1,9 +1,14 @@
 #[macro_use]
 extern crate lazy_static;
 
+use std::vec;
 use std::collections::BTreeMap;
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::{Rng, rngs::StdRng, SeedableRng};
+
+const BEHAVIOUR_ARR_LENGTH: usize = 3;
+const ACTORS_IN_SPACE: usize = 11; 
+const PROBABILITY_STEP: f64  = 1.0 / (ACTORS_IN_SPACE - 1) as f64;
 
 const RESOURCE_BIAS: f64 = 1.0;
 const SEED: [u8; 32] = [2; 32];
@@ -23,18 +28,17 @@ lazy_static! {
 
 type Resources<'a> = BTreeMap<&'a str, u32>;
 type Behaviour<'a> = fn(Resources<'a>, &mut StdRng) -> Resources<'a>;
-type BehaviourProbs<'a> = Vec<(Behaviour<'a>, f64)>;
 
 #[derive(Debug, Default)]
 struct Actor<'a> {
     id: &'a str,
     resources: Resources<'a>,
-    behaviours: BehaviourProbs<'a>,
+    behaviour_probs: Vec<(&'a Behaviour<'a>, f64)>,
 } 
 
 impl<'a> Actor<'a> {
-    fn new(id: &'a str, resources: Resources<'a>, behaviours: BehaviourProbs<'a>) -> Actor<'a> {
-        Actor {id, resources, behaviours}
+    fn new(id: &'a str, resources: Resources<'a>, behaviour_probs: Vec<(&'a Behaviour<'a>, f64)>) -> Actor<'a> {
+        Actor {id, resources, behaviour_probs}
     }
 
     fn get_resource(&self, resource_name: &str) -> u32 {
@@ -57,13 +61,6 @@ impl<'a> Actor<'a> {
         }
     }
 
-    // fn add_to_resource(&mut self, name: &'a str, amount_to_add: u32) {
-    //     let old_amount = self.get_resource(name);
-    //     let new_amount = old_amount + amount_to_add;
-    //     let change = BTreeMap::from([(name, new_amount)]);
-    //     self.update_resources(change);
-    // }
-
     // We add RESOURCE_BIAS because without it resource change 0 -> 1 will not change utility.
     // It is so because ln(1.0) == 0.0.
     fn utility(&self) -> f64 {
@@ -81,19 +78,6 @@ impl<'a> Actor<'a> {
         println!("Resources for {}:\n{:?}\nUtility: {:.4}\n", &self.id, &self.resources, &self.utility());
     }
 
-    fn execute_action(&mut self, rng: &mut StdRng) {
-        let (behaviours, probabilities): (Vec<Behaviour>, Vec<f64>) = 
-        self.behaviours
-        .iter()
-        .cloned()
-        .unzip();
-
-        let weighted_dist = WeightedIndex::new(&probabilities).unwrap();
-        let chosen_behaviour = behaviours[weighted_dist.sample(rng)];
-        let new_resources = chosen_behaviour(self.resources.clone(), rng);
-
-        self.update_resources(new_resources);
-    }
 }
 
 struct Pallet<'a> {
@@ -104,9 +88,16 @@ impl<'a> Pallet<'a> {
     fn new(actors: Vec<Actor<'a>>) -> Pallet<'a> {
         Pallet{actors}
     }
+
     fn execute_actions_for_actors(&mut self, rng:&mut StdRng) {
         for actor in &mut self.actors {
-            actor.execute_action(rng);
+            let (behaviours, probabilities): (Vec<&Behaviour>, Vec<f64>) = 
+            actor.behaviour_probs.iter().cloned().unzip();
+
+            let weighted_dist = WeightedIndex::new(&probabilities).unwrap();
+            let chosen_behaviour = *behaviours[weighted_dist.sample(rng)];
+            let new_resources = chosen_behaviour(actor.resources.clone(), rng);
+            actor.update_resources(new_resources);
         }
     }
 
@@ -122,27 +113,65 @@ fn mine_gold<'a>(mut resources: Resources<'a>, _: &mut StdRng) -> Resources<'a> 
     resources
 }
 
-fn mine_gems<'a>(mut resources: Resources<'a>, rng: &mut StdRng) -> Resources<'a> {
+fn mine_ore<'a>(mut resources: Resources<'a>, rng: &mut StdRng) -> Resources<'a> {
+    if rng.gen_bool(0.9) { 
+        *resources.entry("ore").or_insert(0) += 1;
+    }
+    resources
+}
+
+fn mine_gem<'a>(mut resources: Resources<'a>, rng: &mut StdRng) -> Resources<'a> {
     if rng.gen_bool(0.5) { 
         *resources.entry("gem").or_insert(0) += 1;
     }
     resources
 }
 
-fn main() {
-    let mut r = StdRng::from_seed(SEED);
-    
-    let alice_behaviours: Vec<(Behaviour, f64)> = vec![(mine_gold as Behaviour,1.0)]; 
-    let alice = Actor::new("Alice", BTreeMap::new(), alice_behaviours);
-    
-    let bob_behaviours: Vec<(Behaviour, f64)> = vec![(mine_gold as Behaviour, 0.8), (mine_gems as Behaviour,0.2)]; 
-    let bob = Actor::new("Bob", BTreeMap::new(), bob_behaviours);
-
-    let mut pallet = Pallet::new(vec![alice, bob]);
-
-    for _ in 1..100 {
-        pallet.execute_actions_for_actors(&mut r);
+fn probability_distributions_recursion(
+    probabilities_for_all_actors: &mut Vec<Vec<f64>>,
+    remaining_probability_steps: usize,
+    probabilities_for_current_actor: &[f64],
+    remaining_recursion_depth: usize,
+) {
+    if remaining_recursion_depth == 0 {
+        let mut probabilities_up_to_last = probabilities_for_current_actor.to_vec();
+        let last_probability = remaining_probability_steps as f64 * PROBABILITY_STEP;
+        probabilities_up_to_last.push(last_probability);
+        println!("{:?}", probabilities_up_to_last);
+        probabilities_for_all_actors.push(probabilities_up_to_last);
+    } else {
+        for i in 0..=remaining_probability_steps {
+            let mut new_probabilities = Vec::from(probabilities_for_current_actor);
+            new_probabilities.push(i as f64 * PROBABILITY_STEP);
+            probability_distributions_recursion(probabilities_for_all_actors, remaining_probability_steps - i, &new_probabilities, remaining_recursion_depth - 1);
+        }
     }
+}
 
-    pallet.print_resources_for_actors();
+
+fn generate_probability_distributions() -> Vec<Vec<f64>> {
+    let mut probabilities_for_all_actors = Vec::new();
+
+    probability_distributions_recursion(&mut probabilities_for_all_actors, ACTORS_IN_SPACE - 1, &mut vec![], BEHAVIOUR_ARR_LENGTH - 1);
+    probabilities_for_all_actors
+}
+
+
+fn main() {
+    let mut rng = StdRng::from_seed(SEED);
+    let probs_for_actors = generate_probability_distributions();
+    
+    // let alice_behaviours: Vec<(&Behaviour, f64)> = vec![(&(mine_gold as Behaviour), 1.0)];
+    // let alice = Actor::new("Alice", BTreeMap::new(), alice_behaviours);
+    
+    // let bob_behaviours: Vec<(&Behaviour, f64)> = vec![(&(mine_gold as Behaviour), 0.8), (&(mine_gems as Behaviour),0.    )]; 
+    // let bob = Actor::new("Bob", BTreeMap::new(), bob_behaviours);
+
+    // let mut pallet = Pallet::new(vec![alice, bob]);
+
+    // for _ in 1..100 {
+    //     pallet.execute_actions_for_actors(&mut rng);
+    // }
+
+    // pallet.print_resources_for_actors();
 }
