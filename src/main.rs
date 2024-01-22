@@ -140,22 +140,22 @@ fn generate_probability_distributions() -> Vec<Vec<f64>> {
 
 fn probability_distributions_recursion(
     probabilities_for_all_actors: &mut Vec<Vec<f64>>,
-    probabilities_for_current_actor: &mut Vec<f64>,
+    probabilities_for_actor: &mut Vec<f64>,
     remaining_probability_steps: usize,
     remaining_recursion_depth: usize,
 ) {
     if remaining_recursion_depth == 0 {
-        let mut transcient_probabilities = probabilities_for_current_actor.clone();
-        transcient_probabilities.push(remaining_probability_steps as f64 * PROBABILITY_STEP);
-        println!("{:?}", transcient_probabilities);
-        probabilities_for_all_actors.push(transcient_probabilities);
+        let mut probabilities_for_storage = probabilities_for_actor.clone();
+        probabilities_for_storage.push(remaining_probability_steps as f64 * PROBABILITY_STEP);
+        println!("{:?}", probabilities_for_storage);
+        probabilities_for_all_actors.push(probabilities_for_storage);
     } else {
         for i in 0..=remaining_probability_steps {
-            let mut transcient_probabilities = probabilities_for_current_actor.clone();
-            transcient_probabilities.push(i as f64 * PROBABILITY_STEP);
+            let mut probabilities_for_recursion = probabilities_for_actor.clone();
+            probabilities_for_recursion.push(i as f64 * PROBABILITY_STEP);
             probability_distributions_recursion(
                 probabilities_for_all_actors, 
-                &mut transcient_probabilities, 
+                &mut probabilities_for_recursion, 
                 remaining_probability_steps - i, 
                 remaining_recursion_depth - 1
             );
