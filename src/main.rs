@@ -127,35 +127,41 @@ fn mine_gem<'a>(mut resources: Resources<'a>, rng: &mut StdRng) -> Resources<'a>
     resources
 }
 
-fn probability_distributions_recursion(
-    probabilities_for_all_actors: &mut Vec<Vec<f64>>,
-    remaining_probability_steps: usize,
-    probabilities_for_current_actor: &[f64],
-    remaining_recursion_depth: usize,
-) {
-    if remaining_recursion_depth == 0 {
-        let mut probabilities_up_to_last = probabilities_for_current_actor.to_vec();
-        let last_probability = remaining_probability_steps as f64 * PROBABILITY_STEP;
-        probabilities_up_to_last.push(last_probability);
-        println!("{:?}", probabilities_up_to_last);
-        probabilities_for_all_actors.push(probabilities_up_to_last);
-    } else {
-        for i in 0..=remaining_probability_steps {
-            let mut new_probabilities = Vec::from(probabilities_for_current_actor);
-            new_probabilities.push(i as f64 * PROBABILITY_STEP);
-            probability_distributions_recursion(probabilities_for_all_actors, remaining_probability_steps - i, &new_probabilities, remaining_recursion_depth - 1);
-        }
-    }
-}
-
-
 fn generate_probability_distributions() -> Vec<Vec<f64>> {
     let mut probabilities_for_all_actors = Vec::new();
-
-    probability_distributions_recursion(&mut probabilities_for_all_actors, ACTORS_IN_SPACE - 1, &mut vec![], BEHAVIOUR_ARR_LENGTH - 1);
+    probability_distributions_recursion(
+        &mut probabilities_for_all_actors,
+        &mut Vec::new(),
+        ACTORS_IN_SPACE - 1,
+        BEHAVIOUR_ARR_LENGTH - 1
+    );
     probabilities_for_all_actors
 }
 
+fn probability_distributions_recursion(
+    probabilities_for_all_actors: &mut Vec<Vec<f64>>,
+    probabilities_for_current_actor: &mut Vec<f64>,
+    remaining_probability_steps: usize,
+    remaining_recursion_depth: usize,
+) {
+    if remaining_recursion_depth == 0 {
+        let mut transcient_probabilities = probabilities_for_current_actor.clone();
+        transcient_probabilities.push(remaining_probability_steps as f64 * PROBABILITY_STEP);
+        println!("{:?}", transcient_probabilities);
+        probabilities_for_all_actors.push(transcient_probabilities);
+    } else {
+        for i in 0..=remaining_probability_steps {
+            let mut transcient_probabilities = probabilities_for_current_actor.clone();
+            transcient_probabilities.push(i as f64 * PROBABILITY_STEP);
+            probability_distributions_recursion(
+                probabilities_for_all_actors, 
+                &mut transcient_probabilities, 
+                remaining_probability_steps - i, 
+                remaining_recursion_depth - 1
+            );
+        }
+    }
+}
 
 fn main() {
     let mut rng = StdRng::from_seed(SEED);
