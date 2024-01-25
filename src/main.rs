@@ -8,8 +8,8 @@ use rand::{Rng, rngs::StdRng, SeedableRng};
 
 const BEHAVIOUR_ARR_LENGTH: usize = 3;
 
-const ACTORS_IN_SPACE: usize = 11; 
-const PROBABILITY_STEP: f64  = 1.0 / (ACTORS_IN_SPACE - 1) as f64;
+const ACTORS_IN_RANGE: usize = 11; 
+const PROBABILITY_STEP: f64  = 1.0 / (ACTORS_IN_RANGE - 1) as f64;
 
 const RESOURCE_BIAS: f64 = 1.0;
 const SEED: [u8; 32] = [2; 32];
@@ -28,17 +28,45 @@ lazy_static! {
 }
 
 type Resources<'a> = BTreeMap<&'a str, u32>;
-type Behaviour<'a> = fn(Resources<'a>, &mut StdRng) -> Resources<'a>;
+
+#[derive(Debug, Clone)]
+struct Behaviour<'a> {
+    function: fn(Resources<'a>, &mut StdRng) -> Resources<'a>,
+    name: &'static str,
+}
+
+#[derive(Debug)]
+struct BehaviourProb<'a> {
+    behaviour: Behaviour<'a>,
+    probability: f64,
+}
 
 #[derive(Debug, Default)]
 struct Actor<'a> {
     resources: Resources<'a>,
-    behaviour_probs: Vec<(&'a NamedBehaviour<'a>, f64)>,
+    behaviours: Vec<BehaviourProb<'a>>,
 } 
 
+#[derive(Debug, Default)]
+struct Pallet<'a> {
+    actors: Vec<Actor<'a>>
+}
+
+impl<'a> Behaviour<'a> {
+    fn new(function: fn(Resources<'a>, &mut StdRng) -> Resources<'a>, name:&'static str) -> Self {
+        Behaviour {function, name}
+    }
+}
+
+impl<'a> BehaviourProb<'a> {
+    fn new(behaviour: Behaviour<'a>, probability: f64) -> Self {
+        BehaviourProb {behaviour, probability}
+    }
+}
+
 impl<'a> Actor<'a> {
-    fn new(resources: Resources<'a>, behaviour_probs: Vec<(&'a NamedBehaviour<'a>, f64)>) -> Actor<'a> {
-        Actor {resources, behaviour_probs}
+    fn new(resources: Resources<'a>, behaviours: Vec<BehaviourProb<'a>>) -> Actor<'a> {
+        Actor {resources, behaviours}
     }
 
     fn get_resource(&self, resource_name: &str) -> u32 {
@@ -57,9 +85,9 @@ impl<'a> Actor<'a> {
 
         if !updates_for_printing.is_empty() {
             let updates_str = updates_for_printing.join(", ");
-            let behaviour_names: Vec<String> = self.behaviour_probs
+            let behaviour_names: Vec<String> = self.behaviours
                 .iter()
-                .map(|(behaviour, prob)| format!("({}: {:.1})", behaviour.name, prob))
+                .map(|b| format!("({}: {:.1})", b.behaviour.name, b.probability))
                 .collect();
             let behaviours_str = behaviour_names.join(", ");
             println!("Resource changes for actor with behaviours\n[{}]:\n{}\n", behaviours_str, updates_str);
@@ -81,10 +109,6 @@ impl<'a> Actor<'a> {
 
 }
 
-struct Pallet<'a> {
-    actors: Vec<Actor<'a>>
-}
-
 impl<'a> Pallet<'a> {
     fn new(actors: Vec<Actor<'a>>) -> Pallet<'a> {
         Pallet{actors}
@@ -92,11 +116,10 @@ impl<'a> Pallet<'a> {
 
     fn execute_actions_for_actors(&mut self, rng:&mut StdRng) {
         for actor in &mut self.actors {
-            let (behaviours, probabilities): (Vec<&NamedBehaviour>, Vec<f64>) = 
-            actor.behaviour_probs.iter().cloned().unzip();
-
+            let probabilities: Vec<f64> = actor.behaviours.iter().map(|b| b.probability).collect();
             let weighted_dist = WeightedIndex::new(&probabilities).unwrap();
-            let chosen_behaviour = (*behaviours[weighted_dist.sample(rng)]).func;
+            let chosen_index = weighted_dist.sample(rng);
+            let chosen_behaviour = actor.behaviours[chosen_index].behaviour.function;
             let new_resources = chosen_behaviour(actor.resources.clone(), rng);
             actor.update_resources(new_resources);
         }
@@ -108,8 +131,6 @@ impl<'a> Pallet<'a> {
             .max_by(|a, b| a.utility().partial_cmp(&b.utility()).unwrap_or(std::cmp::Ordering::Equal))
     }
 }
-
-
 
 fn mine_gold<'a>(mut resources: Resources<'a>, _: &mut StdRng) -> Resources<'a> {
     *resources.entry("ore").or_insert(0) += 1;
@@ -130,25 +151,12 @@ fn mine_gem<'a>(mut resources: Resources<'a>, rng: &mut StdRng) -> Resources<'a>
     resources
 }
 
-#[derive(Debug)]
-struct NamedBehaviour<'a> {
-    func: Behaviour<'a>,
-    name: &'static str,
-}
-
-impl<'a> NamedBehaviour<'a> {
-    fn new(func: Behaviour<'a>, name: &'static str) -> Self {
-        NamedBehaviour { func, name }
-    }
-}
-
-
 fn generate_probability_distributions() -> Vec<Vec<f64>> {
     let mut probabilities_for_all_actors = Vec::new();
     probability_distributions_recursion(
         &mut probabilities_for_all_actors,
         &mut Vec::new(),
-        ACTORS_IN_SPACE - 1,
+        ACTORS_IN_RANGE - 1,
         BEHAVIOUR_ARR_LENGTH - 1
     );
     probabilities_for_all_actors
@@ -181,21 +189,23 @@ fn probability_distributions_recursion(
 
 fn main() {
     let probabilities_for_actors = generate_probability_distributions();
-    let actions = vec![
-        NamedBehaviour::new(mine_ore as Behaviour, "mine_ore"),
-        NamedBehaviour::new(mine_gold as Behaviour, "mine_gold"),
-        NamedBehaviour::new(mine_gem as Behaviour, "mine_gem"),
+    let behaviours = vec![
+        Behaviour::new(mine_ore, "mine_ore"),
+        Behaviour::new(mine_gold, "mine_gold"),
+        Behaviour::new(mine_gem, "mine_gem"),
     ];
 
     
     let mut pallet = Pallet::new(vec![]);
     for probs in probabilities_for_actors.iter() {
-        pallet.actors.push(
-            Actor::new(
-                BTreeMap::new(),
-                actions.iter().zip(probs.iter().cloned()).collect()
-            )
-        )
+
+        let behaviour_probs: Vec<BehaviourProb> = behaviours
+        .iter()
+        .zip(probs.iter())
+        .map(|(b, &p)| BehaviourProb::new(b.clone(), p))
+        .collect();
+
+        pallet.actors.push(Actor::new(BTreeMap::new(), behaviour_probs));
     }
     
     let mut rng = StdRng::from_seed(SEED);
