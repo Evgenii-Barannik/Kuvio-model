@@ -7,6 +7,7 @@ use rand::distributions::{Distribution, WeightedIndex};
 use rand::{Rng, rngs::StdRng, SeedableRng};
 
 const BEHAVIOUR_ARR_LENGTH: usize = 3;
+
 const ACTORS_IN_SPACE: usize = 11; 
 const PROBABILITY_STEP: f64  = 1.0 / (ACTORS_IN_SPACE - 1) as f64;
 
@@ -31,14 +32,13 @@ type Behaviour<'a> = fn(Resources<'a>, &mut StdRng) -> Resources<'a>;
 
 #[derive(Debug, Default)]
 struct Actor<'a> {
-    id: &'a str,
     resources: Resources<'a>,
-    behaviour_probs: Vec<(&'a Behaviour<'a>, f64)>,
+    behaviour_probs: Vec<(&'a NamedBehaviour<'a>, f64)>,
 } 
 
 impl<'a> Actor<'a> {
-    fn new(id: &'a str, resources: Resources<'a>, behaviour_probs: Vec<(&'a Behaviour<'a>, f64)>) -> Actor<'a> {
-        Actor {id, resources, behaviour_probs}
+    fn new(resources: Resources<'a>, behaviour_probs: Vec<(&'a NamedBehaviour<'a>, f64)>) -> Actor<'a> {
+        Actor {resources, behaviour_probs}
     }
 
     fn get_resource(&self, resource_name: &str) -> u32 {
@@ -56,8 +56,13 @@ impl<'a> Actor<'a> {
         }
 
         if !updates_for_printing.is_empty() {
-            let updates_str = updates_for_printing.join("\n");
-            println!("Resource changes for {}:\n{}\n", self.id, updates_str);
+            let updates_str = updates_for_printing.join(", ");
+            let behaviour_names: Vec<String> = self.behaviour_probs
+                .iter()
+                .map(|(behaviour, prob)| format!("({}: {:.1})", behaviour.name, prob))
+                .collect();
+            let behaviours_str = behaviour_names.join(", ");
+            println!("Resource changes for actor with behaviours\n[{}]:\n{}\n", behaviours_str, updates_str);
         }
     }
 
@@ -73,10 +78,6 @@ impl<'a> Actor<'a> {
         }
         total_utility
     }
-    
-    fn print_resources(&self) {
-        println!("Resources for {}:\n{:?}\nUtility: {:.4}\n", &self.id, &self.resources, &self.utility());
-    }
 
 }
 
@@ -91,31 +92,33 @@ impl<'a> Pallet<'a> {
 
     fn execute_actions_for_actors(&mut self, rng:&mut StdRng) {
         for actor in &mut self.actors {
-            let (behaviours, probabilities): (Vec<&Behaviour>, Vec<f64>) = 
+            let (behaviours, probabilities): (Vec<&NamedBehaviour>, Vec<f64>) = 
             actor.behaviour_probs.iter().cloned().unzip();
 
             let weighted_dist = WeightedIndex::new(&probabilities).unwrap();
-            let chosen_behaviour = *behaviours[weighted_dist.sample(rng)];
+            let chosen_behaviour = (*behaviours[weighted_dist.sample(rng)]).func;
             let new_resources = chosen_behaviour(actor.resources.clone(), rng);
             actor.update_resources(new_resources);
         }
     }
 
-    fn print_resources_for_actors(&self) {
-        for actor in &self.actors {
-            actor.print_resources();
-        }
+    fn actor_with_highest_utility(&self) -> Option<&Actor<'a>> {
+        self.actors
+            .iter()
+            .max_by(|a, b| a.utility().partial_cmp(&b.utility()).unwrap_or(std::cmp::Ordering::Equal))
     }
 }
 
+
+
 fn mine_gold<'a>(mut resources: Resources<'a>, _: &mut StdRng) -> Resources<'a> {
-    *resources.entry("gold").or_insert(0) += 1;
+    *resources.entry("ore").or_insert(0) += 1;
     resources
 }
 
 fn mine_ore<'a>(mut resources: Resources<'a>, rng: &mut StdRng) -> Resources<'a> {
     if rng.gen_bool(0.9) { 
-        *resources.entry("ore").or_insert(0) += 1;
+        *resources.entry("gold").or_insert(0) += 1;
     }
     resources
 }
@@ -126,6 +129,19 @@ fn mine_gem<'a>(mut resources: Resources<'a>, rng: &mut StdRng) -> Resources<'a>
     }
     resources
 }
+
+#[derive(Debug)]
+struct NamedBehaviour<'a> {
+    func: Behaviour<'a>,
+    name: &'static str,
+}
+
+impl<'a> NamedBehaviour<'a> {
+    fn new(func: Behaviour<'a>, name: &'static str) -> Self {
+        NamedBehaviour { func, name }
+    }
+}
+
 
 fn generate_probability_distributions() -> Vec<Vec<f64>> {
     let mut probabilities_for_all_actors = Vec::new();
@@ -164,20 +180,30 @@ fn probability_distributions_recursion(
 }
 
 fn main() {
+    let probabilities_for_actors = generate_probability_distributions();
+    let actions = vec![
+        NamedBehaviour::new(mine_ore as Behaviour, "mine_ore"),
+        NamedBehaviour::new(mine_gold as Behaviour, "mine_gold"),
+        NamedBehaviour::new(mine_gem as Behaviour, "mine_gem"),
+    ];
+
+    
+    let mut pallet = Pallet::new(vec![]);
+    for probs in probabilities_for_actors.iter() {
+        pallet.actors.push(
+            Actor::new(
+                BTreeMap::new(),
+                actions.iter().zip(probs.iter().cloned()).collect()
+            )
+        )
+    }
+    
     let mut rng = StdRng::from_seed(SEED);
-    let probs_for_actors = generate_probability_distributions();
-    
-    // let alice_behaviours: Vec<(&Behaviour, f64)> = vec![(&(mine_gold as Behaviour), 1.0)];
-    // let alice = Actor::new("Alice", BTreeMap::new(), alice_behaviours);
-    
-    // let bob_behaviours: Vec<(&Behaviour, f64)> = vec![(&(mine_gold as Behaviour), 0.8), (&(mine_gems as Behaviour),0.    )]; 
-    // let bob = Actor::new("Bob", BTreeMap::new(), bob_behaviours);
+    for _ in 1..1000 {
+        pallet.execute_actions_for_actors(&mut rng);
+    }
 
-    // let mut pallet = Pallet::new(vec![alice, bob]);
+    let winner = pallet.actor_with_highest_utility().unwrap();
+    println!("Actor with highest utility {} is\n{:?}", winner.utility(), winner)
 
-    // for _ in 1..100 {
-    //     pallet.execute_actions_for_actors(&mut rng);
-    // }
-
-    // pallet.print_resources_for_actors();
 }
