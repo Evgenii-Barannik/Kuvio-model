@@ -6,10 +6,10 @@ use std::collections::BTreeMap;
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::{Rng, rngs::StdRng, SeedableRng};
 
-const ACTORS_IN_RANGE: usize = 6; 
+const ACTORS_IN_RANGE: usize = 3; 
 const PROBABILITY_STEP: f64  = 1.0 / (ACTORS_IN_RANGE - 1) as f64;
 const GAME_SEED: [u8; 32] = [3; 32];
-const GAME_FRAMES: u32 = 50;
+const GAME_FRAMES: u32 = 10;
 
 fn gather_taxes<'a>(mut actor_resources: Resources<'a>, mut tile_resources: Resources<'a>, rng: &mut StdRng) -> Option<(Resources<'a>, Resources<'a>)> {
     if rng.gen_bool(1.0) { 
@@ -27,7 +27,7 @@ fn mine_ore<'a>(mut actor_resources: Resources<'a>, mut tile_resources: Resource
             *tile_resources.entry("ore").or_insert(0) -= resource_change;
             return Some((actor_resources, tile_resources));
         } else {
-            println!("Attempted to mine ore, but the tile is exhausted!");
+            println!("Attempted to mine ore, but the tile is exhausted!\n");
             return None;
         }
     }
@@ -43,7 +43,7 @@ fn mine_gem<'a>(mut actor_resources: Resources<'a>, mut tile_resources: Resource
             *tile_resources.entry("gem").or_insert(0) -= resource_change;
             return Some((actor_resources, tile_resources));
         } else {
-            println!("Attempted to mine gem, but the tile is exhausted!");
+            println!("Attempted to mine gem, but the tile is exhausted!\n");
             return None;
         }
     }
@@ -133,6 +133,13 @@ impl<'a> Actor<'a> {
         }
         total_utility
     }
+
+    fn get_pretty_behaviours (&self) -> String {
+        let behaviour_names: Vec<String> = self.behaviours.iter().map(|b| format!("{} ({:.1})", b.behaviour.name, b.probability)).collect();
+        let behaviours_str = behaviour_names.join(", ");
+        return behaviours_str
+    }
+    
 }
 
 impl<'a> Tile<'a> {
@@ -144,39 +151,37 @@ impl<'a> Tile<'a> {
         *self.resources.get(resource_name).unwrap_or(&0)
      }
 
-    fn update_resources(&mut self, actor_id: usize, actor_changes: Resources<'a>, tile_changes: Resources<'a>) {
+     fn update_resources(&mut self, actor_id: usize, actor_changes: Resources<'a>, tile_changes: Resources<'a>) {
         let mut actor_changes_for_printing = Vec::new();
         let mut tile_changes_for_printing = Vec::new();
-
+    
         for (&resource_name, &new_amount) in actor_changes.iter() {
             let actor = self.actors.get_mut(actor_id).unwrap();
             let old_amount = actor.get_resource(resource_name);
             if new_amount != old_amount {
                 actor.resources.insert(resource_name, new_amount);
-                actor_changes_for_printing.push(format!("\"{}\": {} -> {}", resource_name, old_amount, new_amount));
+                actor_changes_for_printing.push(format!("{}: {} -> {}", resource_name, old_amount, new_amount));
             }
         }
-
+    
         for (&resource_name, &new_amount) in tile_changes.iter() {
-            let old_amount = self.get_resource(resource_name).clone();
+            let old_amount = self.get_resource(resource_name);
             if new_amount != old_amount {
                 self.resources.insert(resource_name, new_amount);
-                tile_changes_for_printing.push(format!("\"{}\": {} -> {}", resource_name, old_amount, new_amount));
+                tile_changes_for_printing.push(format!("{}: {} -> {}", resource_name, old_amount, new_amount));
             }
         }
-
-        if !actor_changes_for_printing.is_empty() {
-            let updates_str = actor_changes_for_printing.join(", ");
-            let actor = self.actors.get_mut(actor_id).unwrap();
-            let behaviour_names: Vec<String> = actor.behaviours
-                .iter()
-                .map(|b| format!("({}: {:.1})", b.behaviour.name, b.probability))
-                .collect();
-            let behaviours_str = behaviour_names.join(", ");
-            println!("Resource changes for actor with behaviour probabilities\n[{}]:\n{}\nNew actor utility: {}", behaviours_str, updates_str, actor.get_utility());
-            println!("Resource changes for tile:\n{:?}\n", tile_changes_for_printing);
+    
+        if !actor_changes_for_printing.is_empty() || !tile_changes_for_printing.is_empty() {
+            let actor = self.actors.get(actor_id).unwrap();
+            
+            println!("Actor ID: {}\nActor Behaviours: [{}]", actor_id, actor.get_pretty_behaviours());
+            println!("Resource Changes for Actor: {}", actor_changes_for_printing.join(", "));
+            println!("Resource Changes for Tile: {}", tile_changes_for_printing.join(", "));
+            println!("Actor's new utility: {}\n", actor.get_utility());
         }
     }
+
 
     fn execute_actions(&mut self, rng: &mut StdRng) {
         for (actor_id, actor) in self.actors.clone().iter().enumerate() {
@@ -267,6 +272,6 @@ fn main() {
     }
 
     let winner = tile.get_highest_utility_actor().unwrap();
-    println!("Actor with highest utility {} is\n{:?}", winner.get_utility(), winner)
+    println!("Actor's with such behaviours won: [{:?}]\nActor utility is {:?}\n", winner.get_pretty_behaviours(), winner.get_utility())
 
 }
