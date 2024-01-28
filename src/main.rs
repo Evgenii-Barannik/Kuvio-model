@@ -6,10 +6,46 @@ use std::collections::BTreeMap;
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::{Rng, rngs::StdRng, SeedableRng};
 
-const ACTORS_IN_RANGE: usize = 3; 
-const PROBABILITY_STEP: f64  = 1.0 / (ACTORS_IN_RANGE - 1) as f64;
-const GAME_SEED: [u8; 32] = [3; 32];
-const GAME_FRAMES: u32 = 10;
+//// Constants to edit ////
+const ACTORS_IN_CROSSECTION: usize = 6; // Total number of actors in game scales as square of this value
+const GAME_FRAMES: u32 = 50;
+const GAME_SEED: [u8; 32] = [2; 32];
+
+lazy_static! {
+    static ref BEHAVIOURS: [Behaviour<'static>; 4] = [
+        Behaviour::new(mine_ore, "mine_ore"),
+        Behaviour::new(gather_taxes, "gather_taxes"),
+        Behaviour::new(mine_gem, "mine_gem"),
+        Behaviour::new(smart_behaviour, "smart_behaviour"),
+    ];
+}
+
+lazy_static! {
+    static ref TILE_INITIAL_RESOURCES: BTreeMap<&'static str, u32> = {
+        let mut tile_resources: Resources = BTreeMap::new();
+        tile_resources.insert("ore", 500);
+        tile_resources.insert("gem", 200);
+
+        tile_resources
+    };
+}
+
+lazy_static! {
+    static ref RESOURCE_WEIGHTS: BTreeMap<&'static str, f64> = {
+        let mut weights = BTreeMap::new();
+        weights.insert("gold", 1.0);
+        weights.insert("wood", 1.0);
+        weights.insert("ore", 1.0);
+        weights.insert("mercury", 5.0);
+        weights.insert("sulfur", 5.0);
+        weights.insert("crystal", 5.0);
+        weights.insert("gem", 5.0);
+        weights
+    };
+}
+//// ////
+
+const PROBABILITY_STEP: f64  = 1.0 / (ACTORS_IN_CROSSECTION - 1) as f64;
 
 fn gather_taxes<'a>(mut actor_resources: Resources<'a>, mut tile_resources: Resources<'a>, rng: &mut StdRng) -> Option<(Resources<'a>, Resources<'a>)> {
     if rng.gen_bool(1.0) { 
@@ -50,28 +86,12 @@ fn mine_gem<'a>(mut actor_resources: Resources<'a>, mut tile_resources: Resource
     None
 }
 
-
-const BEHAVIOURS_ARR_LENGTH: usize = 3;
-lazy_static! {
-    static ref BEHAVIOURS: [Behaviour<'static>; BEHAVIOURS_ARR_LENGTH] = [
-        Behaviour::new(mine_ore, "mine_ore"),
-        Behaviour::new(gather_taxes, "gather_taxes"),
-        Behaviour::new(mine_gem, "mine_gem"),
-        ];
+fn smart_behaviour<'a>(mut actor_resources: Resources<'a>, mut tile_resources: Resources<'a>, rng: &mut StdRng) -> Option<(Resources<'a>, Resources<'a>)> {
+    if *tile_resources.entry("gem").or_insert(0) > 0 {
+        return mine_gem(actor_resources, tile_resources, rng)
+    } else {
+        return gather_taxes(actor_resources, tile_resources, rng)
     }
-    
-lazy_static! {
-    static ref RESOURCE_WEIGHTS: BTreeMap<&'static str, f64> = {
-        let mut m = BTreeMap::new();
-        m.insert("gold", 1.0);
-        m.insert("wood", 1.0);
-        m.insert("ore", 1.0);
-        m.insert("mercury", 5.0);
-        m.insert("sulfur", 5.0);
-        m.insert("crystal", 5.0);
-        m.insert("gem", 5.0);
-        m
-    };
 }
 
 type Resources<'a> = BTreeMap<&'a str, u32>;
@@ -135,7 +155,7 @@ impl<'a> Actor<'a> {
     }
 
     fn get_pretty_behaviours (&self) -> String {
-        let behaviour_names: Vec<String> = self.behaviours.iter().map(|b| format!("{} ({:.1})", b.behaviour.name, b.probability)).collect();
+        let behaviour_names: Vec<String> = self.behaviours.iter().map(|b| format!("{} ({:.3})", b.behaviour.name, b.probability)).collect();
         let behaviours_str = behaviour_names.join(", ");
         return behaviours_str
     }
@@ -219,8 +239,8 @@ fn generate_probability_distributions() -> Vec<Vec<f64>> {
     probability_distributions_recursion(
         &mut probabilities_for_all_actors,
         &mut Vec::new(),
-        ACTORS_IN_RANGE - 1,
-        BEHAVIOURS_ARR_LENGTH - 1
+        ACTORS_IN_CROSSECTION - 1,
+        BEHAVIOURS.len() - 1
     );
     probabilities_for_all_actors
 }
@@ -252,17 +272,15 @@ fn probability_distributions_recursion(
 
 fn main() {
     let probabilities_for_actors = generate_probability_distributions();
-    let mut tile_resources: Resources = BTreeMap::new();
-    tile_resources.insert("ore", 50);
-    tile_resources.insert("gem", 50);
 
-    let mut tile = Tile::new(vec![], tile_resources);
+    let mut tile = Tile::new(vec![], TILE_INITIAL_RESOURCES.clone());
     for probs in probabilities_for_actors.iter() {
         let behaviour_probs: Vec<BehaviourProb> = BEHAVIOURS
         .iter()
         .zip(probs.iter())
         .map(|(b, &p)| BehaviourProb::new(b.clone(), p))
         .collect();
+    
         tile.actors.push(Actor::new(BTreeMap::new(), behaviour_probs));
     }
     
@@ -272,6 +290,6 @@ fn main() {
     }
 
     let winner = tile.get_highest_utility_actor().unwrap();
-    println!("Actor's with such behaviours won: [{:?}]\nActor utility is {:?}\n", winner.get_pretty_behaviours(), winner.get_utility())
+    println!("Actor with such behaviours won: [{:?}]\nActor's resources are: [{:?}]\nActor's utility is: {:?}\n", winner.get_pretty_behaviours(), winner.resources, winner.get_utility())
 
 }
