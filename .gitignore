@@ -162,5 +162,6 @@ cython_debug/
 
 # Added by cargo
 
-/target
 .DS_Store
+/target
+/output/*

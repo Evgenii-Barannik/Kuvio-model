@@ -1,20 +1,39 @@
 #[macro_use]
 extern crate lazy_static;
 
+use std::fs;
+// use rayon::ThreadPoolBuilder;
+use rayon::prelude::*;
+use std::time::Instant;
 use std::vec;
 use std::collections::BTreeMap;
+use itertools::Itertools;
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::{Rng, rngs::StdRng, SeedableRng};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::fs::write;
 
-//// Constants to edit ////
-const ACTORS_IN_CROSSECTION: usize = 6; // Total number of actors in game scales as square of this value
-const GAME_FRAMES: u32 = 50;
-const GAME_SEED: [u8; 32] = [2; 32];
+#[derive(Debug, Clone, Hash)]
+enum HyperParam {
+    NumOfProbSteps(usize),
+    GameTicks(usize),
+    GameSeed([u8; 32])
+}
+
+// Hyperparameter ranges that define searched phasespace
+lazy_static! {
+    static ref HYPER_PARAMS_RANGES: Vec<Vec<HyperParam>> = vec![
+        (1..=3).map(HyperParam::NumOfProbSteps).collect::<Vec<_>>(),
+        (100..=100).map(HyperParam::GameTicks).collect::<Vec<_>>(),
+        vec![HyperParam::GameSeed([2; 32])] 
+    ];
+}
 
 lazy_static! {
     static ref BEHAVIOURS: [Behaviour<'static>; 4] = [
-        Behaviour::new(mine_ore, "mine_ore"),
         Behaviour::new(gather_taxes, "gather_taxes"),
+        Behaviour::new(mine_ore, "mine_ore"),
         Behaviour::new(mine_gem, "mine_gem"),
         Behaviour::new(smart_behaviour, "smart_behaviour"),
     ];
@@ -23,7 +42,7 @@ lazy_static! {
 lazy_static! {
     static ref TILE_INITIAL_RESOURCES: BTreeMap<&'static str, u32> = {
         let mut tile_resources: Resources = BTreeMap::new();
-        tile_resources.insert("ore", 500);
+        tile_resources.insert("ore", 1000);
         tile_resources.insert("gem", 200);
 
         tile_resources
@@ -43,9 +62,6 @@ lazy_static! {
         weights
     };
 }
-//// ////
-
-const PROBABILITY_STEP: f64  = 1.0 / (ACTORS_IN_CROSSECTION - 1) as f64;
 
 fn gather_taxes<'a>(mut actor_resources: Resources<'a>, mut tile_resources: Resources<'a>, rng: &mut StdRng) -> Option<(Resources<'a>, Resources<'a>)> {
     if rng.gen_bool(1.0) { 
@@ -63,7 +79,7 @@ fn mine_ore<'a>(mut actor_resources: Resources<'a>, mut tile_resources: Resource
             *tile_resources.entry("ore").or_insert(0) -= resource_change;
             return Some((actor_resources, tile_resources));
         } else {
-            println!("Attempted to mine ore, but the tile is exhausted!\n");
+            // println!("Attempted to mine ore, but the tile is exhausted!\n");
             return None;
         }
     }
@@ -79,7 +95,7 @@ fn mine_gem<'a>(mut actor_resources: Resources<'a>, mut tile_resources: Resource
             *tile_resources.entry("gem").or_insert(0) -= resource_change;
             return Some((actor_resources, tile_resources));
         } else {
-            println!("Attempted to mine gem, but the tile is exhausted!\n");
+            // println!("Attempted to mine gem, but the tile is exhausted!\n");
             return None;
         }
     }
@@ -155,7 +171,7 @@ impl<'a> Actor<'a> {
     }
 
     fn get_pretty_behaviours (&self) -> String {
-        let behaviour_names: Vec<String> = self.behaviours.iter().map(|b| format!("{} ({:.3})", b.behaviour.name, b.probability)).collect();
+        let behaviour_names: Vec<String> = self.behaviours.iter().map(|b| format!("{} ({:.0}%)", b.behaviour.name, b.probability * 100.0)).collect();
         let behaviours_str = behaviour_names.join(", ");
         return behaviours_str
     }
@@ -171,7 +187,7 @@ impl<'a> Tile<'a> {
         *self.resources.get(resource_name).unwrap_or(&0)
      }
 
-     fn update_resources(&mut self, actor_id: usize, actor_changes: Resources<'a>, tile_changes: Resources<'a>) {
+     fn update_resources(&mut self, actor_id: usize, actor_changes: Resources<'a>, tile_changes: Resources<'a>, log: &mut String) {
         let mut actor_changes_for_printing = Vec::new();
         let mut tile_changes_for_printing = Vec::new();
     
@@ -194,16 +210,17 @@ impl<'a> Tile<'a> {
     
         if !actor_changes_for_printing.is_empty() || !tile_changes_for_printing.is_empty() {
             let actor = self.actors.get(actor_id).unwrap();
-            
-            println!("Actor ID: {}\nActor Behaviours: [{}]", actor_id, actor.get_pretty_behaviours());
-            println!("Resource Changes for Actor: {}", actor_changes_for_printing.join(", "));
-            println!("Resource Changes for Tile: {}", tile_changes_for_printing.join(", "));
-            println!("Actor's new utility: {}\n", actor.get_utility());
+
+
+            log.push_str(&format!("Actor ID: {}\nActor Behaviours: [{}]\n", actor_id, actor.get_pretty_behaviours()));
+            log.push_str(&format!("Resource Changes for Actor: {}\n", actor_changes_for_printing.join(", ")));
+            log.push_str(&format!("Resource Changes for Tile: {}\n", tile_changes_for_printing.join(", ")));
+            log.push_str(&format!("Actor's new utility: {}\n\n", actor.get_utility()));
         }
     }
 
 
-    fn execute_actions(&mut self, rng: &mut StdRng) {
+    fn execute_actions(&mut self, rng: &mut StdRng, log: &mut String) {
         for (actor_id, actor) in self.actors.clone().iter().enumerate() {
             let probabilities: Vec<f64> = actor.behaviours.iter().map(|b| b.probability).collect();
             let weighted_distribution = WeightedIndex::new(&probabilities).unwrap();
@@ -214,7 +231,7 @@ impl<'a> Tile<'a> {
             // If the resource change is possible (thus behaviour is also possible) for the actor we are currently iterating over, the change will occur.
             // Consequently, other actors may fail in attempting to execute exactly the same behavior in the same "frame" due to a lack of resources in the Tile.
             if let Some((new_actor_resources, new_tile_resources)) = chosen_behaviour(actor.resources.clone(), self.resources.clone(), rng) {
-                self.update_resources(actor_id, new_actor_resources, new_tile_resources);
+                self.update_resources(actor_id, new_actor_resources, new_tile_resources, log);
             }
         }
     }
@@ -234,15 +251,35 @@ fn possble_to_subtract(value: u32, amount_to_sustract: u32) -> bool {
     }
 }
 
-fn generate_probability_distributions() -> Vec<Vec<f64>> {
-    let mut probabilities_for_all_actors = Vec::new();
-    probability_distributions_recursion(
-        &mut probabilities_for_all_actors,
-        &mut Vec::new(),
-        ACTORS_IN_CROSSECTION - 1,
-        BEHAVIOURS.len() - 1
-    );
-    probabilities_for_all_actors
+fn generate_probability_distributions(actors_in_crossection: usize, log: &mut String) -> Vec<Vec<f64>> {
+    match actors_in_crossection {
+        0 => {panic!("There should be at least one actor.")},
+        1 => {
+            let len = BEHAVIOURS.len();
+            let probabilities_for_actor = vec![vec![1.0/(len as f64); len]];
+            log.push_str(&format!("Probability distribution for actor:\n{:?}\n\n", probabilities_for_actor));
+            probabilities_for_actor
+        }, 
+        _ => {
+            let mut probabilities_for_all_actors = Vec::new();
+
+            probability_distributions_recursion(
+                &mut probabilities_for_all_actors,
+                &mut Vec::new(),
+                actors_in_crossection - 1,
+                BEHAVIOURS.len() - 1,
+                actors_in_crossection,
+            );
+            
+            log.push_str("Probability distributions for actors:\n");
+                for distribution in probabilities_for_all_actors.iter() {
+                log.push_str(&format!("{:?}\n", distribution));
+            }
+            log.push_str("\n");
+
+            probabilities_for_all_actors
+        }
+    }
 }
 
 fn probability_distributions_recursion(
@@ -250,46 +287,85 @@ fn probability_distributions_recursion(
     probabilities_for_actor: &mut Vec<f64>,
     remaining_probability_steps: usize,
     remaining_recursion_depth: usize,
+    actors_in_crossection: usize,
 ) {
+    let probability_step: f64 = 1.0 / (actors_in_crossection - 1) as f64;
     if remaining_recursion_depth == 0 {
         let mut probabilities_for_storage = probabilities_for_actor.clone();
-        probabilities_for_storage.push(remaining_probability_steps as f64 * PROBABILITY_STEP);
+        probabilities_for_storage.push(remaining_probability_steps as f64 * probability_step);
         // println!("{:?}", probabilities_for_storage);
         probabilities_for_all_actors.push(probabilities_for_storage);
     } else {
         for i in 0..=remaining_probability_steps {
             let mut probabilities_for_recursion = probabilities_for_actor.clone();
-            probabilities_for_recursion.push(i as f64 * PROBABILITY_STEP);
+            probabilities_for_recursion.push(i as f64 * probability_step);
             probability_distributions_recursion(
                 probabilities_for_all_actors, 
                 &mut probabilities_for_recursion, 
                 remaining_probability_steps - i, 
-                remaining_recursion_depth - 1
+                remaining_recursion_depth - 1,
+                actors_in_crossection,
             );
         }
     }
 }
 
+fn hash_hyper_params(hyper_params: &[HyperParam]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    hyper_params.hash(&mut hasher);
+    hasher.finish()
+}
+
 fn main() {
-    let probabilities_for_actors = generate_probability_distributions();
+    let timer = Instant::now();
+    fs::create_dir_all("output").unwrap();
+    // rayon::ThreadPoolBuilder::new().num_threads(1).build_global().unwrap();
 
-    let mut tile = Tile::new(vec![], TILE_INITIAL_RESOURCES.clone());
-    for probs in probabilities_for_actors.iter() {
-        let behaviour_probs: Vec<BehaviourProb> = BEHAVIOURS
-        .iter()
-        .zip(probs.iter())
-        .map(|(b, &p)| BehaviourProb::new(b.clone(), p))
-        .collect();
-    
-        tile.actors.push(Actor::new(BTreeMap::new(), behaviour_probs));
-    }
-    
-    let mut rng = StdRng::from_seed(GAME_SEED);
-    for _ in 1..GAME_FRAMES {
-        tile.execute_actions(&mut rng);
-    }
+    HYPER_PARAMS_RANGES.clone()
+    .into_iter()
+    .multi_cartesian_product()
+    .collect::<Vec<_>>()
+    .into_par_iter()
+    .for_each( |hyper_params| {
 
-    let winner = tile.get_highest_utility_actor().unwrap();
-    println!("Actor with such behaviours won: [{:?}]\nActor's resources are: [{:?}]\nActor's utility is: {:?}\n", winner.get_pretty_behaviours(), winner.resources, winner.get_utility())
+        if let [HyperParam::NumOfProbSteps(actors_in_crossection),
+                HyperParam::GameTicks(game_ticks),
+                HyperParam::GameSeed(game_seed)] = hyper_params[..] {
 
+                let mut log = String::new();
+                log.push_str(&format!("Number of possible probability values for one behaviour: {},\nTotal game ticks: {},\nGame seed: {:?}\n\n",
+                actors_in_crossection, game_ticks, game_seed));
+
+                let probabilities_for_actors = generate_probability_distributions(actors_in_crossection, &mut log);
+                let mut tile = Tile::new(vec![], TILE_INITIAL_RESOURCES.clone());
+                for probs in probabilities_for_actors.iter() {
+                    let behaviour_probs: Vec<BehaviourProb> = BEHAVIOURS
+                    .iter()
+                    .zip(probs.iter())
+                    .map(|(b, &p)| BehaviourProb::new(b.clone(), p))
+                    .collect();
+                    tile.actors.push(Actor::new(BTreeMap::new(), behaviour_probs));
+                }
+                
+                let mut rng = StdRng::from_seed(game_seed);
+                for t in 0..game_ticks {
+                    log.push_str(&format! ("-- Game tick {} --\n", t));
+                    tile.execute_actions(&mut rng, &mut log);
+                }
+                
+            let winner = tile.get_highest_utility_actor().unwrap();
+
+            log.push_str(&format!("Actor with such behaviours won: [{:?}]\nActor's resources are: {:?}\nActor's utility is: {:?}\n",
+            winner.get_pretty_behaviours(),
+            winner.resources,
+            winner.get_utility()));
+
+            let hash = hash_hyper_params(&hyper_params);
+            let file_name = format!("output/{}.txt", hash);
+            write(&file_name, log).unwrap();
+
+        } else { panic!("Hyperparameters were not parsed correctly.") }
+    });
+
+    println!("Execution time: {:?}", timer.elapsed());
 }
