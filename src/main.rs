@@ -27,7 +27,7 @@ lazy_static! {
     ];
 }
 
-#[derive(PartialEq, PartialOrd, Eq, Ord, Debug)]
+#[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Hash, Clone)]
 enum Resource {
     Gold,
     Wood,
@@ -35,19 +35,19 @@ enum Resource {
 }
 
 lazy_static! {
-    static ref TILE_INITIAL_RESOURCES: BTreeMap<&'static Resource, u32> = {
+    static ref TILE_INITIAL_RESOURCES: BTreeMap<Resource, u32> = {
         let mut tile_resources: Resources = BTreeMap::new();
-        tile_resources.insert(&Resource::Gold, 500);
-        tile_resources.insert(&Resource::Wood, 500);
+        tile_resources.insert(Resource::Gold, 500);
+        tile_resources.insert(Resource::Wood, 500);
 
         tile_resources
     };
 }
 
-type BehaviourFn<'a> = fn(usize, &mut Tile<'a>, &mut StdRng) -> Result<(), &'a str>;
+type BehaviourFn = fn(usize, &mut Tile, &mut StdRng) -> Result<(), String>; // TODO Change usize to 
 
 lazy_static! {
-    static ref BEHAVIOURS: [Behaviour<'static>; 4] = [
+    static ref BEHAVIOURS: [Behaviour; 4] = [
         Behaviour::new(gather_taxes, "gather_taxes"),
         Behaviour::new(harvest_wood, "harvest_wood"),
         Behaviour::new(mine_gold, "mine_gold"),
@@ -55,100 +55,100 @@ lazy_static! {
     ];
 }
 
-fn gather_taxes<'a>(current_actor_index: usize, tile: &mut Tile<'a>, rng: &mut StdRng) -> Result<(), &'a str> {
+fn gather_taxes(current_actor_index: usize, tile: &mut Tile, rng: &mut StdRng) -> Result<(), String> {
     let resource_change: u32 = 1;
     
     if rng.gen_bool(1.0) { 
-            *tile.actors[current_actor_index].resources.entry(&Resource::Gold).or_insert(0) += resource_change;
+            *tile.actors[current_actor_index].resources.entry(Resource::Gold).or_insert(0) += resource_change;
             return Ok(())
     } else {
-        Err("No luck.")
+        Err(String::from("No luck."))
     }
 }
 
-fn harvest_wood<'a>(current_actor_index: usize, tile: &mut Tile<'a>, rng: &mut StdRng) -> Result<(), &'a str> {
+fn harvest_wood(current_actor_index: usize, tile: &mut Tile, rng: &mut StdRng) -> Result<(), String> {
     let resource_change: u32 = 1;
     
     if rng.gen_bool(1.0) { 
-        let old_tile_resource_amount = *tile.resources.entry(&Resource::Wood).or_insert(0);
+        let old_tile_resource_amount = *tile.resources.entry(Resource::Wood).or_insert(0);
         if possble_to_subtract(old_tile_resource_amount, resource_change) {
-            *tile.resources.entry(&Resource::Wood).or_insert(0) -= resource_change;
-            *tile.actors[current_actor_index].resources.entry(&Resource::Wood).or_insert(0) += resource_change;
+            *tile.resources.entry(Resource::Wood).or_insert(0) -= resource_change;
+            *tile.actors[current_actor_index].resources.entry(Resource::Wood).or_insert(0) += resource_change;
             return Ok(())
         } else {
-            return Err("Not enough wood to harvest.")
+            return Err(String::from("Not enough wood to harvest."))
         }
     } else {
-        Err("No luck.")
+        Err(String::from("No luck."))
     }
 }
 
-fn mine_gold<'a>(current_actor_index: usize, tile: &mut Tile<'a>, rng: &mut StdRng) -> Result<(), &'a str> {
+fn mine_gold(current_actor_index: usize, tile: &mut Tile, rng: &mut StdRng) -> Result<(), String> {
     let resource_change: u32 = 1;
     
     if rng.gen_bool(0.5) { 
-        let old_tile_resource_amount = *tile.resources.entry(&Resource::Gold).or_insert(0);
+        let old_tile_resource_amount = *tile.resources.entry(Resource::Gold).or_insert(0);
         if possble_to_subtract(old_tile_resource_amount, resource_change) {
-            *tile.resources.entry(&Resource::Gold).or_insert(0) -= resource_change;
-            *tile.actors[current_actor_index].resources.entry(&Resource::Gold).or_insert(0) += resource_change;
+            *tile.resources.entry(Resource::Gold).or_insert(0) -= resource_change;
+            *tile.actors[current_actor_index].resources.entry(Resource::Gold).or_insert(0) += resource_change;
             return Ok(())
         } else {
-            return Err("Not enough gold to mine.")
+            return Err(String::from("Not enough gold to mine."))
         }
     } else {
-        Err("No luck in gold mining.")
+        Err(String::from("No luck in gold mining."))
     }
 }
 
-fn smart_behaviour<'a>(current_actor_index: usize, tile: &mut Tile<'a>, rng: &mut StdRng) -> Result<(), &'a str> {
-    if *tile.resources.entry(&Resource::Gold).or_insert(0) > 0 {
+fn smart_behaviour(current_actor_index: usize, tile: &mut Tile, rng: &mut StdRng) -> Result<(), String> {
+    if *tile.resources.entry(Resource::Gold).or_insert(0) > 0 {
         return mine_gold(current_actor_index, tile, rng)
     } else {
         return gather_taxes(current_actor_index, tile, rng)
     }
 }
 
-type Resources<'a> = BTreeMap<&'a Resource, u32>;
+type Resources = BTreeMap<Resource, u32>;
 
 #[derive(Debug, Clone)]
-struct Behaviour<'a> {
-    function: BehaviourFn<'a>,
+struct Behaviour {
+    function: BehaviourFn,
     name: &'static str, // TODO Remove this and change struct
 }
 
 #[derive(Debug, Clone)]
-struct BehaviourProb<'a> {
-    behaviour: Behaviour<'a>,
+struct BehaviourProb {
+    behaviour: Behaviour,
     probability: f64,
 }
 
 #[derive(Debug, Clone)]
-struct Actor<'a> {
-    behaviours: Vec<BehaviourProb<'a>>,
-    resources: Resources<'a>,
+struct Actor {
+    behaviours: Vec<BehaviourProb>,
+    resources: Resources,
 } 
 
 #[derive(Debug, Default, Clone)]
-struct Tile<'a> {
-    actors: Vec<Actor<'a>>, 
-    resources: Resources<'a>
+struct Tile {
+    actors: Vec<Actor>, 
+    resources: Resources,
 }
 
-impl<'a> Behaviour<'a> {
+impl Behaviour {
     fn new(
-        function: BehaviourFn<'a>,
+        function: BehaviourFn,
         name:&'static str
     ) -> Self { Behaviour {function, name} }
 }
 
-impl<'a> BehaviourProb<'a> {
-    fn new(behaviour: Behaviour<'a>, probability: f64) -> Self {
+impl BehaviourProb {
+    fn new(behaviour: Behaviour, probability: f64) -> Self {
         BehaviourProb {behaviour, probability}
     }
 }
 
-impl<'a> Actor<'a> {
-    fn new(resources: Resources<'a>, behaviours: Vec<BehaviourProb<'a>>) -> Actor<'a> {
+impl Actor {
+    fn new(resources: Resources, behaviours: Vec<BehaviourProb>) -> Actor {
         Actor {resources, behaviours}
     }
 
@@ -166,8 +166,8 @@ impl<'a> Actor<'a> {
 
 }
 
-impl<'a> Tile<'a> {
-    fn new(actors: Vec<Actor<'a>>, resources: Resources<'a>) -> Tile<'a> {
+impl Tile {
+    fn new(actors: Vec<Actor>, resources: Resources) -> Tile {
         Tile{actors, resources}
     }
 
@@ -193,7 +193,7 @@ impl<'a> Tile<'a> {
     }
 }
 
-fn log_resource_changes<'a>(initial_tile: &Tile<'a>, new_tile: &Tile<'a>, actor_index: usize, log: &mut String,) {
+fn log_resource_changes(initial_tile: &Tile, new_tile: &Tile, actor_index: usize, log: &mut String,) {
     for (resource, &initial_amount) in initial_tile.resources.iter() {
         let new_amount = new_tile.resources.get(resource).unwrap_or(&0);
         if initial_amount != *new_amount {
@@ -285,7 +285,7 @@ fn probability_distributions_recursion(
     }
 }
 
-    fn log_behaviour_probs<'a>(behaviour_probs: &[Vec<BehaviourProb<'a>>], log: &mut String) {
+    fn log_behaviour_probs<'a>(behaviour_probs: &[Vec<BehaviourProb>], log: &mut String) {
         log.push_str("Actor ID, Behaviours with probabilities: \n");
     
         for (actor_id, actor_behaviours) in behaviour_probs.iter().enumerate() {
@@ -317,15 +317,15 @@ fn main() {
     .into_par_iter()
     .for_each( |hyper_params| {
 
-        if let [HyperParam::NumOfProbValues(actors_in_crossection),
-                HyperParam::GameTicks(game_ticks),
+        if let [HyperParam::NumOfProbValues(num_of_probability_values),
+                HyperParam::GameTicks(num_of_game_ticks),
                 HyperParam::GameSeed(game_seed)] = hyper_params[..] {
 
                 let mut log = String::new();
                 log.push_str(&format!("Number of possible probability values for one behaviour: {},\nTotal game ticks: {},\nGame seed: {:?}\n\n",
-                actors_in_crossection, game_ticks, game_seed));
+                num_of_probability_values, num_of_game_ticks, game_seed));
 
-                let probabilities_for_actors = generate_probability_distributions(actors_in_crossection);
+                let probabilities_for_actors = generate_probability_distributions(num_of_probability_values);
                 
                 let behaviour_probs: Vec<Vec<BehaviourProb>> = probabilities_for_actors.iter()
                     .map(|probs| 
@@ -345,7 +345,7 @@ fn main() {
                 }
             
                 let mut rng = StdRng::from_seed(game_seed);
-                for t in 0..game_ticks {
+                for t in 0..num_of_game_ticks {
                     log.push_str(&format! ("\n---------- Game tick {} ----------\n", t));
                     tile.execute_behaviour(&mut rng, &mut log);
                 }
