@@ -6,27 +6,43 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::fs::write;
 use itertools::Itertools;
+use itertools::iproduct;
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::{Rng, rngs::StdRng, SeedableRng};
 use rayon::prelude::*;
+use rayon::ThreadPoolBuilder;
 use lazy_static::lazy_static;
 
 #[derive(Debug, Clone, Hash)]
 enum HyperParam {
     NumOfProbValues(usize),
     GameTicks(usize),
-    GameSeed([u8; 32])
+    GameSeed([u8; 32]),
+    InitialTileResources(Resources),
 }
 
-// Hyperparameter ranges that define searched phasespace
+// Hyperparameter ranges that define region of phasespace that we explore
 lazy_static! {
     static ref HYPER_PARAMS_RANGES: Vec<Vec<HyperParam>> = vec![
-        (5..=5).map(HyperParam::NumOfProbValues).collect::<Vec<_>>(),
-        vec![HyperParam::GameTicks(500), HyperParam::GameTicks(5000), HyperParam::GameTicks(50000)],
-        vec![HyperParam::GameSeed([2; 32])] 
+        (5..=6).map(HyperParam::NumOfProbValues).collect::<Vec<_>>(),
+        [4000, 5000].into_iter().map(HyperParam::GameTicks).collect::<Vec<_>>(),
+        vec![HyperParam::GameSeed([2; 32])],
+        INITIAL_RESOURCE_COMBINATIONS.to_vec(),
     ];
 }
 
+lazy_static! {
+    static ref INITIAL_RESOURCE_COMBINATIONS: Vec<HyperParam> = {
+        let gold_range = (1u32..=4u32).map(|x| 500 * x); 
+        let wood_range = (1u32..=4u32).map(|x| 1000 * x); 
+        
+        iproduct!(gold_range, wood_range)
+        .map(|(gold, wood)| {
+            HyperParam::InitialTileResources(BTreeMap::from([(Resource::Gold, gold), (Resource::Wood, wood)]))})
+        .collect::<Vec<_>>()
+    };
+}
+        
 #[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Hash, Clone)]
 enum Resource {
     Gold,
@@ -34,41 +50,18 @@ enum Resource {
     Reputation,
 }
 
-lazy_static! {
-    static ref TILE_INITIAL_RESOURCES: BTreeMap<Resource, u32> = {
-        let mut tile_resources: Resources = BTreeMap::new();
-        tile_resources.insert(Resource::Gold, 500);
-        tile_resources.insert(Resource::Wood, 500);
-
-        tile_resources
-    };
-}
-
-type BehaviourFn = fn(usize, &mut Tile, &mut StdRng) -> Result<(), String>; // TODO Change usize to 
+type BehaviourFn = fn(usize, &mut Tile, &mut StdRng) -> Result<(), String>; // TODO Change usize to Actor reference if Rust memory system will allow.
 
 lazy_static! {
-    static ref BEHAVIOURS: [Behaviour; 4] = [
-        Behaviour::new(gather_taxes, "gather_taxes"),
+    static ref BEHAVIOURS: [Behaviour; 3] = [
         Behaviour::new(harvest_wood, "harvest_wood"),
         Behaviour::new(mine_gold, "mine_gold"),
-        Behaviour::new(smart_behaviour, "smart_behaviour"),
+        Behaviour::new(get_reputation_or_gold, "get_reputation_or_gold"),
     ];
-}
-
-fn gather_taxes(current_actor_index: usize, tile: &mut Tile, rng: &mut StdRng) -> Result<(), String> {
-    let resource_change: u32 = 1;
-    
-    if rng.gen_bool(1.0) { 
-            *tile.actors[current_actor_index].resources.entry(Resource::Gold).or_insert(0) += resource_change;
-            return Ok(())
-    } else {
-        Err(String::from("No luck."))
-    }
 }
 
 fn harvest_wood(current_actor_index: usize, tile: &mut Tile, rng: &mut StdRng) -> Result<(), String> {
     let resource_change: u32 = 1;
-    
     if rng.gen_bool(1.0) { 
         let old_tile_resource_amount = *tile.resources.entry(Resource::Wood).or_insert(0);
         if possble_to_subtract(old_tile_resource_amount, resource_change) {
@@ -85,7 +78,6 @@ fn harvest_wood(current_actor_index: usize, tile: &mut Tile, rng: &mut StdRng) -
 
 fn mine_gold(current_actor_index: usize, tile: &mut Tile, rng: &mut StdRng) -> Result<(), String> {
     let resource_change: u32 = 1;
-    
     if rng.gen_bool(0.5) { 
         let old_tile_resource_amount = *tile.resources.entry(Resource::Gold).or_insert(0);
         if possble_to_subtract(old_tile_resource_amount, resource_change) {
@@ -100,11 +92,27 @@ fn mine_gold(current_actor_index: usize, tile: &mut Tile, rng: &mut StdRng) -> R
     }
 }
 
-fn smart_behaviour(current_actor_index: usize, tile: &mut Tile, rng: &mut StdRng) -> Result<(), String> {
-    if *tile.resources.entry(Resource::Gold).or_insert(0) > 0 {
-        return mine_gold(current_actor_index, tile, rng)
+fn get_reputation_or_gold(current_actor_index: usize, tile: &mut Tile, rng: &mut StdRng) -> Result<(), String> {
+    let resource_change: u32 = 1;
+    let mut other_actors = tile.actors.clone();
+    other_actors.remove(current_actor_index);
+
+    let max_reputation_among_other_actors = other_actors.iter()
+        .map(|actor| actor.resources.get(&Resource::Reputation).unwrap_or(&0))
+        .max()
+        .unwrap_or(&0);
+
+    let actor_reputation = tile.actors[current_actor_index]
+        .resources
+        .get(&Resource::Reputation)
+        .unwrap_or(&0);
+
+    if actor_reputation > max_reputation_among_other_actors {
+        *tile.actors[current_actor_index].resources.entry(Resource::Gold).or_insert(0) += resource_change;
+        Ok(())
     } else {
-        return gather_taxes(current_actor_index, tile, rng)
+        *tile.actors[current_actor_index].resources.entry(Resource::Reputation).or_insert(0) += resource_change;
+        Ok(())
     }
 }
 
@@ -113,7 +121,7 @@ type Resources = BTreeMap<Resource, u32>;
 #[derive(Debug, Clone)]
 struct Behaviour {
     function: BehaviourFn,
-    name: &'static str, // TODO Remove this and change struct
+    name: &'static str, // TODO Remove this field and struct
 }
 
 #[derive(Debug, Clone)]
@@ -198,8 +206,8 @@ fn log_resource_changes(initial_tile: &Tile, new_tile: &Tile, actor_index: usize
         let new_amount = new_tile.resources.get(resource).unwrap_or(&0);
         if initial_amount != *new_amount {
             log.push_str(&format!(
-                "Tile Resource Change: {:?} {} -> {}\n",
-                resource, initial_amount, new_amount
+                "Actor {} made tile resource change: {:?} {} -> {}\n",
+                actor_index, resource, initial_amount, new_amount
             ));
         }
     }
@@ -210,20 +218,12 @@ fn log_resource_changes(initial_tile: &Tile, new_tile: &Tile, actor_index: usize
         let new_amount = new_actor.resources.get(resource).unwrap_or(&0);
         if initial_amount != *new_amount {
             log.push_str(&format!(
-                "Actor {} Resource Change: {:?} {} -> {}\n",
+                "Actor {} resource change: {:?} {} -> {}\n",
                 actor_index, resource, initial_amount, new_amount
             ));
         }
     }
-
-    let initial_utility = initial_actor.get_utility();
-    let new_utility = new_actor.get_utility();
-    if initial_utility != new_utility {
-        log.push_str(&format!(
-            "Actor {} Utility Change: {:.2} -> {:.2}\n",
-            actor_index, initial_utility, new_utility
-        ));
-    }
+    
 }
 
 fn possble_to_subtract(value: u32, amount_to_sustract: u32) -> bool {
@@ -310,6 +310,8 @@ fn main() {
     let timer = Instant::now();
     fs::create_dir_all("output").unwrap();
 
+    // rayon::ThreadPoolBuilder::new().num_threads(1).build_global().unwrap();
+
     HYPER_PARAMS_RANGES.clone()
     .into_iter()
     .multi_cartesian_product()
@@ -319,15 +321,16 @@ fn main() {
 
         if let [HyperParam::NumOfProbValues(num_of_probability_values),
                 HyperParam::GameTicks(num_of_game_ticks),
-                HyperParam::GameSeed(game_seed)] = hyper_params[..] {
+                HyperParam::GameSeed(game_seed),
+                HyperParam::InitialTileResources(initial_tile_resources)
+                ] = &hyper_params[..] {
 
                 let mut log = String::new();
-                log.push_str(&format!("Number of possible probability values for one behaviour: {},\nTotal game ticks: {},\nGame seed: {:?}\n\n",
-                num_of_probability_values, num_of_game_ticks, game_seed));
+                log.push_str(&format!("Number of possible probability values for one behaviour: {},\nTotal game ticks: {},\nGame seed: {:?},\nInitial tile Resources: {:?}\n\n",
+                num_of_probability_values, num_of_game_ticks, game_seed, &initial_tile_resources));
 
-                let probabilities_for_actors = generate_probability_distributions(num_of_probability_values);
-                
-                let behaviour_probs: Vec<Vec<BehaviourProb>> = probabilities_for_actors.iter()
+                let behaviour_probs: Vec<Vec<BehaviourProb>> = generate_probability_distributions(*num_of_probability_values)
+                    .iter()
                     .map(|probs| 
                         BEHAVIOURS.iter()
                         .zip(probs.iter())
@@ -338,14 +341,16 @@ fn main() {
 
                 log_behaviour_probs(&behaviour_probs, &mut log);
 
-                let mut tile = Tile::new(vec![], TILE_INITIAL_RESOURCES.clone());
+                let mut tile = Tile::new(vec![], initial_tile_resources.clone());
                 for actor_behaviour_probs in behaviour_probs.iter() {
-                    let actor = Actor::new(BTreeMap::new(), actor_behaviour_probs.clone());
+                    let actor = Actor::new(
+                        BTreeMap::from([(Resource::Gold, 0), (Resource::Reputation, 0), (Resource::Wood, 0)]),
+                        actor_behaviour_probs.clone()); // TODO Make bugfree initialisation with empty dict.
                     tile.actors.push(actor);
                 }
             
-                let mut rng = StdRng::from_seed(game_seed);
-                for t in 0..num_of_game_ticks {
+                let mut rng = StdRng::from_seed(*game_seed);
+                for t in 0..*num_of_game_ticks {
                     log.push_str(&format! ("\n---------- Game tick {} ----------\n", t));
                     tile.execute_behaviour(&mut rng, &mut log);
                 }
