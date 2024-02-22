@@ -1,17 +1,17 @@
 use std::fs;
 use std::time::Instant;
 use std::vec;
-use std::collections::BTreeMap;
-use std::collections::hash_map::DefaultHasher;
+use std::collections::{BTreeMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::fs::write;
-use itertools::Itertools;
-use itertools::iproduct;
+use itertools::{iproduct, Itertools};
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::{Rng, rngs::StdRng, SeedableRng};
-use rayon::prelude::*;
-use rayon::ThreadPoolBuilder;
 use lazy_static::lazy_static;
+use rayon::prelude::*;
+use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
+// use rayon::ThreadPoolBuilder;
 
 #[derive(Debug, Clone, Hash)]
 enum HyperParam {
@@ -21,9 +21,10 @@ enum HyperParam {
     InitialTileResources(Resources),
 }
 
-// Hyperparameter ranges that define region of phasespace that we explore
+// Hyperparameter ranges that define region of phase space that we explore.
+// Vectors are created differently to serve as examples.
 lazy_static! {
-    static ref HYPER_PARAMS_RANGES: Vec<Vec<HyperParam>> = vec![
+    static ref HYPERPARAM_RANGES: Vec<Vec<HyperParam>> = vec![ 
         (5..=6).map(HyperParam::NumOfProbValues).collect::<Vec<_>>(),
         [4000, 5000].into_iter().map(HyperParam::GameTicks).collect::<Vec<_>>(),
         vec![HyperParam::GameSeed([2; 32])],
@@ -43,36 +44,30 @@ lazy_static! {
     };
 }
         
-#[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Hash, Clone)]
+#[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Hash, Clone, EnumIter)]
 enum Resource {
     Gold,
     Wood,
     Reputation,
 }
 
-type BehaviourFn = fn(usize, &mut Tile, &mut StdRng) -> Result<(), String>; // TODO Change usize to Actor reference if Rust memory system will allow.
+// TODO Change usize showing Actors place to the Actor reference if Rust borrow checker will allow.
+type BehaviourFn = fn(usize, &mut Tile, &mut StdRng) -> Result<(), String>; 
 
 lazy_static! {
-    static ref BEHAVIOURS: [Behaviour; 3] = [
-        Behaviour::new(harvest_wood, "harvest_wood"),
-        Behaviour::new(mine_gold, "mine_gold"),
-        Behaviour::new(get_reputation_or_gold, "get_reputation_or_gold"),
-    ];
+    static ref BEHAVIOURS: [BehaviourFn; 3] = 
+    [harvest_wood, mine_gold, get_reputation_or_gold];
 }
 
-fn harvest_wood(current_actor_index: usize, tile: &mut Tile, rng: &mut StdRng) -> Result<(), String> {
+fn harvest_wood(current_actor_index: usize, tile: &mut Tile, _rng: &mut StdRng) -> Result<(), String> {
     let resource_change: u32 = 1;
-    if rng.gen_bool(1.0) { 
-        let old_tile_resource_amount = *tile.resources.entry(Resource::Wood).or_insert(0);
-        if possble_to_subtract(old_tile_resource_amount, resource_change) {
-            *tile.resources.entry(Resource::Wood).or_insert(0) -= resource_change;
-            *tile.actors[current_actor_index].resources.entry(Resource::Wood).or_insert(0) += resource_change;
-            return Ok(())
-        } else {
-            return Err(String::from("Not enough wood to harvest."))
-        }
+    let old_tile_resource_amount = *tile.resources.entry(Resource::Wood).or_insert(0);
+    if possble_to_subtract(old_tile_resource_amount, resource_change) {
+        *tile.resources.entry(Resource::Wood).or_insert(0) -= resource_change;
+        *tile.actors[current_actor_index].resources.entry(Resource::Wood).or_insert(0) += resource_change;
+        Ok(())
     } else {
-        Err(String::from("No luck."))
+        Err(String::from("Not enough wood to harvest."))
     }
 }
 
@@ -83,16 +78,16 @@ fn mine_gold(current_actor_index: usize, tile: &mut Tile, rng: &mut StdRng) -> R
         if possble_to_subtract(old_tile_resource_amount, resource_change) {
             *tile.resources.entry(Resource::Gold).or_insert(0) -= resource_change;
             *tile.actors[current_actor_index].resources.entry(Resource::Gold).or_insert(0) += resource_change;
-            return Ok(())
+            Ok(())
         } else {
-            return Err(String::from("Not enough gold to mine."))
+            Err(String::from("Not enough gold to mine."))
         }
     } else {
         Err(String::from("No luck in gold mining."))
     }
 }
 
-fn get_reputation_or_gold(current_actor_index: usize, tile: &mut Tile, rng: &mut StdRng) -> Result<(), String> {
+fn get_reputation_or_gold(current_actor_index: usize, tile: &mut Tile, _rng: &mut StdRng) -> Result<(), String> {
     let resource_change: u32 = 1;
     let mut other_actors = tile.actors.clone();
     other_actors.remove(current_actor_index);
@@ -119,14 +114,8 @@ fn get_reputation_or_gold(current_actor_index: usize, tile: &mut Tile, rng: &mut
 type Resources = BTreeMap<Resource, u32>;
 
 #[derive(Debug, Clone)]
-struct Behaviour {
-    function: BehaviourFn,
-    name: &'static str, // TODO Remove this field and struct
-}
-
-#[derive(Debug, Clone)]
 struct BehaviourProb {
-    behaviour: Behaviour,
+    behaviour: BehaviourFn,
     probability: f64,
 }
 
@@ -142,27 +131,26 @@ struct Tile {
     resources: Resources,
 }
 
-impl Behaviour {
-    fn new(
-        function: BehaviourFn,
-        name:&'static str
-    ) -> Self { Behaviour {function, name} }
-}
-
 impl BehaviourProb {
-    fn new(behaviour: Behaviour, probability: f64) -> Self {
+    fn new(behaviour: BehaviourFn, probability: f64) -> Self {
         BehaviourProb {behaviour, probability}
     }
 }
 
 impl Actor {
-    fn new(resources: Resources, behaviours: Vec<BehaviourProb>) -> Actor {
-        Actor {resources, behaviours}
+    fn new(initial_resources: Resources, behaviours: Vec<BehaviourProb>) -> Actor {
+        let mut zeroed_resources = Resource::iter().map(|r| (r, 0)).collect::<Resources>();
+        
+        for (resource, amount) in initial_resources {
+            zeroed_resources.insert(resource, amount);
+        }
+        
+        Actor {resources: zeroed_resources, behaviours}
     }
 
     fn get_utility(&self) -> f64 {
         let mut total_utility = 0.0;
-        for (resource, &amount) in &self.resources {
+        for (_resource, &amount) in &self.resources {
             if amount > 0 {
                 total_utility += f64::ln(amount as f64) + 1.0;
                     // We add constant to the {log of resource amount} because without it resource change from 0 to 1 will not change utility.
@@ -187,14 +175,14 @@ impl Tile {
                 let probabilities: Vec<f64> = actor.behaviours.iter().map(|b| b.probability).collect();
                 let weighted_distribution = WeightedIndex::new(&probabilities).unwrap();
                 let chosen_index = weighted_distribution.sample(rng);
-                actor.behaviours[chosen_index].behaviour.function
+                actor.behaviours[chosen_index].behaviour
             };
             let old_tile = self.clone();
 
             // First-come, first-served resource extraction system:
             // If the resource change is possible (thus behaviour is also possible) for the actor we are currently iterating over, the change will occur.
             // Consequently, other actors may fail in attempting to execute exactly the same behavior in the same game tick due to a lack of resources in the Tile.
-            chosen_behaviour(i, self, rng);
+            let _ = chosen_behaviour(i, self, rng);
 
             log_resource_changes(&old_tile, self, i, log)
         }
@@ -226,8 +214,8 @@ fn log_resource_changes(initial_tile: &Tile, new_tile: &Tile, actor_index: usize
     
 }
 
-fn possble_to_subtract(value: u32, amount_to_sustract: u32) -> bool {
-    if amount_to_sustract > value {
+fn possble_to_subtract(value: u32, amount_to_substract: u32) -> bool {
+    if amount_to_substract > value {
         false
     } else {
         true
@@ -286,11 +274,17 @@ fn probability_distributions_recursion(
 }
 
     fn log_behaviour_probs<'a>(behaviour_probs: &[Vec<BehaviourProb>], log: &mut String) {
+        let mut function_names = BTreeMap::new();
+        function_names.insert(harvest_wood as *const (), "harvest_wood");
+        function_names.insert(mine_gold as *const (), "mine_gold");
+        function_names.insert(get_reputation_or_gold as *const (), "get_reputation_or_gold");
+    
         log.push_str("Actor ID, Behaviours with probabilities: \n");
     
         for (actor_id, actor_behaviours) in behaviour_probs.iter().enumerate() {
             let row = actor_behaviours.iter().map(|bp| {
-                format!("{} ({:.0}%)", bp.behaviour.name, bp.probability * 100.0)
+                let function_ptr = bp.behaviour as *const ();
+                format!("{} ({:.0}%)", function_names.get(&function_ptr).unwrap(), bp.probability * 100.0)
             }).collect::<Vec<String>>().join(", ");
     
             log.push_str(&format!("{}, [{}]\n", actor_id, row));
@@ -312,7 +306,7 @@ fn main() {
 
     // rayon::ThreadPoolBuilder::new().num_threads(1).build_global().unwrap();
 
-    HYPER_PARAMS_RANGES.clone()
+    HYPERPARAM_RANGES.clone()
     .into_iter()
     .multi_cartesian_product()
     .collect::<Vec<_>>()
@@ -343,9 +337,7 @@ fn main() {
 
                 let mut tile = Tile::new(vec![], initial_tile_resources.clone());
                 for actor_behaviour_probs in behaviour_probs.iter() {
-                    let actor = Actor::new(
-                        BTreeMap::from([(Resource::Gold, 0), (Resource::Reputation, 0), (Resource::Wood, 0)]),
-                        actor_behaviour_probs.clone()); // TODO Make bugfree initialisation with empty dict.
+                    let actor = Actor::new(BTreeMap::new(), actor_behaviour_probs.clone());
                     tile.actors.push(actor);
                 }
             
