@@ -16,17 +16,19 @@ use strum_macros::EnumIter;
 #[derive(Debug, Clone, Hash)]
 enum HyperParam {
     NumOfProbValues(usize),
-    GameTicks(usize),
+    NumOfGameTicks(usize),
     GameSeed([u8; 32]),
     InitialTileResources(Resources),
 }
+
+type HyperParamCombination = (usize, usize, [u8; 32], Resources);
 
 // Hyperparameter ranges that define region of phase space that we explore.
 // Vectors are created differently to serve as examples.
 lazy_static! {
     static ref HYPERPARAM_RANGES: Vec<Vec<HyperParam>> = vec![ 
         (5..=6).map(HyperParam::NumOfProbValues).collect::<Vec<_>>(),
-        [4000, 5000].into_iter().map(HyperParam::GameTicks).collect::<Vec<_>>(),
+        [4000, 5000].into_iter().map(HyperParam::NumOfGameTicks).collect::<Vec<_>>(),
         vec![HyperParam::GameSeed([2; 32])],
         INITIAL_RESOURCE_COMBINATIONS.to_vec(),
     ];
@@ -182,7 +184,7 @@ impl Tile {
             // First-come, first-served resource extraction system:
             // If the resource change is possible (thus behaviour is also possible) for the actor we are currently iterating over, the change will occur.
             // Consequently, other actors may fail in attempting to execute exactly the same behavior in the same game tick due to a lack of resources in the Tile.
-            let _ = chosen_behaviour(i, self, rng);
+            let _result = chosen_behaviour(i, self, rng);
 
             log_resource_changes(&old_tile, self, i, log)
         }
@@ -294,11 +296,35 @@ fn probability_distributions_recursion(
     
 
 
-fn hash_hyper_params(hyper_params: &[HyperParam]) -> u64 {
+fn hash_hyper_params(hyper_params: &HyperParamCombination) -> u64 {
     let mut hasher = DefaultHasher::new();
     hyper_params.hash(&mut hasher);
     hasher.finish()
 }
+
+macro_rules! for_each_hyperparam_combination {
+    ($callback:expr) => {{
+        HYPERPARAM_RANGES.clone()
+            .into_iter()
+            .multi_cartesian_product()
+            .collect::<Vec<_>>()
+            .into_par_iter()
+            .for_each(|hyperparams| {
+                if let [HyperParam::NumOfProbValues(num_of_prob_values),
+                        HyperParam::NumOfGameTicks(num_of_game_ticks),
+                        HyperParam::GameSeed(game_seed),
+                        HyperParam::InitialTileResources(initial_tile_resources)
+                       ] = &hyperparams[..] {
+                    
+                    $callback((*num_of_prob_values, *num_of_game_ticks, *game_seed, initial_tile_resources.clone()));
+
+                } else {
+                    panic!("Hyperparameters were not parsed correctly.");
+                }
+            });
+    }};
+}
+
 
 fn main() {
     let timer = Instant::now();
@@ -306,62 +332,47 @@ fn main() {
 
     // rayon::ThreadPoolBuilder::new().num_threads(1).build_global().unwrap();
 
-    HYPERPARAM_RANGES.clone()
-    .into_iter()
-    .multi_cartesian_product()
-    .collect::<Vec<_>>()
-    .into_par_iter()
-    .for_each( |hyper_params| {
+        for_each_hyperparam_combination!(|hyperparams: HyperParamCombination| {
+            let (num_of_prob_values, num_of_game_ticks, game_seed, ref initial_tile_resources) = hyperparams;
 
-        if let [HyperParam::NumOfProbValues(num_of_probability_values),
-                HyperParam::GameTicks(num_of_game_ticks),
-                HyperParam::GameSeed(game_seed),
-                HyperParam::InitialTileResources(initial_tile_resources)
-                ] = &hyper_params[..] {
+            let mut log = String::new();
+            log.push_str(&format!("Number of possible probability values for one behaviour: {},\nTotal game ticks: {},\nGame seed: {:?},\nInitial tile Resources: {:?}\n\n",
+            num_of_prob_values, num_of_game_ticks, game_seed, &initial_tile_resources));
 
-                let mut log = String::new();
-                log.push_str(&format!("Number of possible probability values for one behaviour: {},\nTotal game ticks: {},\nGame seed: {:?},\nInitial tile Resources: {:?}\n\n",
-                num_of_probability_values, num_of_game_ticks, game_seed, &initial_tile_resources));
+            let behaviour_probs: Vec<Vec<BehaviourProb>> = generate_probability_distributions(num_of_prob_values)
+                .iter()
+                .map(|probs| 
+                    BEHAVIOURS.iter()
+                    .zip(probs.iter())
+                    .map(|(behaviour, &probability)| BehaviourProb::new(behaviour.clone(), probability))
+                    .collect()
+                )
+                .collect();
+            log_behaviour_probs(&behaviour_probs, &mut log);
 
-                let behaviour_probs: Vec<Vec<BehaviourProb>> = generate_probability_distributions(*num_of_probability_values)
-                    .iter()
-                    .map(|probs| 
-                        BEHAVIOURS.iter()
-                        .zip(probs.iter())
-                        .map(|(behaviour, &probability)| BehaviourProb::new(behaviour.clone(), probability))
-                        .collect()
-                    )
-                    .collect();
-
-                log_behaviour_probs(&behaviour_probs, &mut log);
-
-                let mut tile = Tile::new(vec![], initial_tile_resources.clone());
-                for actor_behaviour_probs in behaviour_probs.iter() {
-                    let actor = Actor::new(BTreeMap::new(), actor_behaviour_probs.clone());
-                    tile.actors.push(actor);
-                }
+            let mut tile = Tile::new(vec![], initial_tile_resources.clone());
+            for actor_behaviour_probs in behaviour_probs.iter() {
+                let actor = Actor::new(BTreeMap::new(), actor_behaviour_probs.clone());
+                tile.actors.push(actor);
+            }
+        
+            let mut rng = StdRng::from_seed(game_seed);
+            for t in 0..num_of_game_ticks {
+                log.push_str(&format! ("\n---------- Game tick {} ----------\n", t));
+                tile.execute_behaviour(&mut rng, &mut log);
+            }
             
-                let mut rng = StdRng::from_seed(*game_seed);
-                for t in 0..*num_of_game_ticks {
-                    log.push_str(&format! ("\n---------- Game tick {} ----------\n", t));
-                    tile.execute_behaviour(&mut rng, &mut log);
-                }
-                
-            let (winner_index, winner) = tile.actors.iter().enumerate()
-            .max_by(|(_, a), (_, b)| a.get_utility().partial_cmp(&b.get_utility()).unwrap_or(std::cmp::Ordering::Equal))
-            .unwrap(); 
+        let (winner_index, winner) = tile.actors.iter().enumerate()
+        .max_by(|(_, a), (_, b)| a.get_utility().partial_cmp(&b.get_utility()).unwrap_or(std::cmp::Ordering::Equal))
+        .unwrap(); 
 
-            log.push_str(&format!("\nActor with this ID won: {:?}\nActor's resources are: {:?}\nActor's utility is: {:?}",
-            winner_index,
-            winner.resources,
-            winner.get_utility()));
+        log.push_str(&format!("\nActor with this ID won: {:?}\nActor's resources are: {:?}\nActor's utility is: {:?}",
+        winner_index, winner.resources, winner.get_utility()));
 
-            let hash = hash_hyper_params(&hyper_params);
-            let file_name = format!("output/{}.txt", hash);
-            write(&file_name, log).unwrap();
-
-        } else { panic!("Hyperparameters were not parsed correctly.") }
-    });
+        let hash = hash_hyper_params(&hyperparams);
+        let file_name = format!("output/{}.txt", hash);
+        write(&file_name, log).unwrap();
+        });
 
     println!("Execution time: {:?}", timer.elapsed());
 }
