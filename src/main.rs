@@ -8,30 +8,38 @@ use itertools::{iproduct, Itertools};
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::{Rng, rngs::StdRng, SeedableRng};
 use lazy_static::lazy_static;
-use rayon::prelude::*;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
+use rayon::prelude::*;
 // use rayon::ThreadPoolBuilder;
 
+// This enum exist to support iteration over possibly different datatypes inside variants. 
 #[derive(Debug, Clone, Hash)]
 enum HyperParam {
-    NumOfProbValues(usize),
-    NumOfGameTicks(usize),
-    GameSeed([u8; 32]),
-    InitialTileResources(Resources),
+    ProbResolution(usize),
+    GameTicks(usize),
+    GameSeed(u64),
+    ResourceCollection(Resources),
 }
 
-type HyperParamCombination = (usize, usize, [u8; 32], Resources);
+type HyperParamCombination = (usize, usize, u64, Resources);
+
+#[derive(Debug, Clone, Hash)]
+struct HyperParamRanges {
+    probability_resolutions: Vec<HyperParam>,
+    game_ticks: Vec<HyperParam>,
+    game_seeds: Vec<HyperParam>,
+    resource_collections: Vec<HyperParam>,
+}
 
 // Hyperparameter ranges that define region of phase space that we explore.
-// Vectors are created differently to serve as examples.
 lazy_static! {
-    static ref HYPERPARAM_RANGES: Vec<Vec<HyperParam>> = vec![ 
-        (5..=6).map(HyperParam::NumOfProbValues).collect::<Vec<_>>(),
-        [4000, 5000].into_iter().map(HyperParam::NumOfGameTicks).collect::<Vec<_>>(),
-        vec![HyperParam::GameSeed([2; 32])],
-        INITIAL_RESOURCE_COMBINATIONS.to_vec(),
-    ];
+    static ref HYPERPARAM_RANGES: HyperParamRanges = HyperParamRanges {
+        probability_resolutions: (5..=6).map(HyperParam::ProbResolution).collect_vec(),
+        game_ticks: [4000, 5000].map(HyperParam::GameTicks).to_vec(),
+        game_seeds: [2].map(HyperParam::GameSeed).to_vec(),
+        resource_collections: INITIAL_RESOURCE_COMBINATIONS.to_vec(),
+    };
 }
 
 lazy_static! {
@@ -40,9 +48,10 @@ lazy_static! {
         let wood_range = (1u32..=4u32).map(|x| 1000 * x); 
         
         iproduct!(gold_range, wood_range)
-        .map(|(gold, wood)| {
-            HyperParam::InitialTileResources(BTreeMap::from([(Resource::Gold, gold), (Resource::Wood, wood)]))})
-        .collect::<Vec<_>>()
+        .map(|(gold_amount, wood_amount)| {
+            HyperParam::ResourceCollection(BTreeMap::from([(Resource::Gold, gold_amount), (Resource::Wood, wood_amount)]))
+        })
+        .collect::<Vec<HyperParam>>()
     };
 }
         
@@ -304,19 +313,22 @@ fn hash_hyper_params(hyper_params: &HyperParamCombination) -> u64 {
 
 macro_rules! for_each_hyperparam_combination {
     ($callback:expr) => {{
-        HYPERPARAM_RANGES.clone()
+        vec![&HYPERPARAM_RANGES.probability_resolutions,
+             &HYPERPARAM_RANGES.game_ticks,
+             &HYPERPARAM_RANGES.game_seeds,
+             &HYPERPARAM_RANGES.resource_collections]
             .into_iter()
             .multi_cartesian_product()
             .collect::<Vec<_>>()
             .into_par_iter()
             .for_each(|hyperparams| {
-                if let [HyperParam::NumOfProbValues(num_of_prob_values),
-                        HyperParam::NumOfGameTicks(num_of_game_ticks),
-                        HyperParam::GameSeed(game_seed),
-                        HyperParam::InitialTileResources(initial_tile_resources)
+                if let [HyperParam::ProbResolution(probability_resolutions),
+                        HyperParam::GameTicks(game_ticks),
+                        HyperParam::GameSeed(game_seeds),
+                        HyperParam::ResourceCollection(resource_collections)
                        ] = &hyperparams[..] {
                     
-                    $callback((*num_of_prob_values, *num_of_game_ticks, *game_seed, initial_tile_resources.clone()));
+                    $callback((*probability_resolutions, *game_ticks, *game_seeds, resource_collections.clone()));
 
                 } else {
                     panic!("Hyperparameters were not parsed correctly.");
@@ -356,7 +368,7 @@ fn main() {
                 tile.actors.push(actor);
             }
         
-            let mut rng = StdRng::from_seed(game_seed);
+            let mut rng = StdRng::seed_from_u64(game_seed as u64);
             for t in 0..num_of_game_ticks {
                 log.push_str(&format! ("\n---------- Game tick {} ----------\n", t));
                 tile.execute_behaviour(&mut rng, &mut log);
