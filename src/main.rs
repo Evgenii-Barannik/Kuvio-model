@@ -63,42 +63,58 @@ enum Resource {
 }
 
 // TODO Change usize showing Actors place to the Actor reference if Rust borrow checker will allow.
-type BehaviourFn = fn(usize, &mut Tile, &mut StdRng) -> Result<(), String>; 
+type BehaviourFn = fn(usize, &mut Tile, &mut StdRng) -> Result<String, String>; 
 
 lazy_static! {
     static ref BEHAVIOURS: [BehaviourFn; 3] = 
     [harvest_wood, mine_gold, get_reputation_or_gold];
 }
 
-fn harvest_wood(current_actor_index: usize, tile: &mut Tile, _rng: &mut StdRng) -> Result<(), String> {
+fn harvest_wood(current_actor_index: usize, tile: &mut Tile, _rng: &mut StdRng) -> Result<String, String> {
     let resource_change: u32 = 1;
-    let old_tile_resource_amount = *tile.resources.entry(Resource::Wood).or_insert(0);
+    let old_tile_resource_amount = *tile.resources.get(&Resource::Wood).unwrap_or(&0);
+    let old_actor_resource_amount = *tile.actors[current_actor_index].resources.get(&Resource::Wood).unwrap_or(&0);
+
     if possble_to_subtract(old_tile_resource_amount, resource_change) {
         *tile.resources.entry(Resource::Wood).or_insert(0) -= resource_change;
         *tile.actors[current_actor_index].resources.entry(Resource::Wood).or_insert(0) += resource_change;
-        Ok(())
+
+        Ok(String::from(format!("Wood {} -> {} for Tile | Wood {} -> {} for Actor {}.\n",
+        old_tile_resource_amount,
+        tile.resources.get(&Resource::Wood).unwrap_or(&0),
+        old_actor_resource_amount,
+        tile.actors[current_actor_index].resources.get(&Resource::Wood).unwrap_or(&0),
+        current_actor_index)))
     } else {
-        Err(String::from("Not enough wood to harvest."))
+        Ok(String::from("Not enough wood to harvest.\n"))
     }
 }
 
-fn mine_gold(current_actor_index: usize, tile: &mut Tile, rng: &mut StdRng) -> Result<(), String> {
-    let resource_change: u32 = 1;
+fn mine_gold(current_actor_index: usize, tile: &mut Tile, rng: &mut StdRng) -> Result<String, String> {
     if rng.gen_bool(0.5) { 
+        let resource_change: u32 = 1;
+        let old_actor_resource_amount = *tile.actors[current_actor_index].resources.get(&Resource::Gold).unwrap_or(&0);
         let old_tile_resource_amount = *tile.resources.entry(Resource::Gold).or_insert(0);
+
         if possble_to_subtract(old_tile_resource_amount, resource_change) {
             *tile.resources.entry(Resource::Gold).or_insert(0) -= resource_change;
             *tile.actors[current_actor_index].resources.entry(Resource::Gold).or_insert(0) += resource_change;
-            Ok(())
+
+            Ok(String::from(format!("Gold {} -> {} for Tile | Gold {} -> {} for Actor {}.\n",
+            old_tile_resource_amount,
+            tile.resources.get(&Resource::Gold).unwrap_or(&0),
+            old_actor_resource_amount,
+            tile.actors[current_actor_index].resources.get(&Resource::Gold).unwrap_or(&0),
+            current_actor_index)))
         } else {
-            Err(String::from("Not enough gold to mine."))
+            Ok(String::from("Not enough gold to mine.\n"))
         }
     } else {
-        Err(String::from("No luck in gold mining."))
+        Ok(String::from("No luck in gold mining.\n"))
     }
 }
 
-fn get_reputation_or_gold(current_actor_index: usize, tile: &mut Tile, _rng: &mut StdRng) -> Result<(), String> {
+fn get_reputation_or_gold(current_actor_index: usize, tile: &mut Tile, _rng: &mut StdRng) -> Result<String, String> {
     let resource_change: u32 = 1;
     let mut other_actors = tile.actors.clone();
     other_actors.remove(current_actor_index);
@@ -108,17 +124,14 @@ fn get_reputation_or_gold(current_actor_index: usize, tile: &mut Tile, _rng: &mu
         .max()
         .unwrap_or(&0);
 
-    let actor_reputation = tile.actors[current_actor_index]
-        .resources
-        .get(&Resource::Reputation)
-        .unwrap_or(&0);
+    let actor_reputation = tile.actors[current_actor_index].resources.get(&Resource::Reputation).unwrap_or(&0);
 
     if actor_reputation > max_reputation_among_other_actors {
         *tile.actors[current_actor_index].resources.entry(Resource::Gold).or_insert(0) += resource_change;
-        Ok(())
+        Ok(String::from("Getting gold for the highest reputation.\n"))
     } else {
         *tile.actors[current_actor_index].resources.entry(Resource::Reputation).or_insert(0) += resource_change;
-        Ok(())
+        Ok(String::from("Not enough reputation to get gold.\n"))
     }
 }
 
@@ -188,41 +201,14 @@ impl Tile {
                 let chosen_index = weighted_distribution.sample(rng);
                 actor.behaviours[chosen_index].behaviour
             };
-            let old_tile = self.clone();
 
             // First-come, first-served resource extraction system:
             // If the resource change is possible (thus behaviour is also possible) for the actor we are currently iterating over, the change will occur.
             // Consequently, other actors may fail in attempting to execute exactly the same behavior in the same game tick due to a lack of resources in the Tile.
-            let _result = chosen_behaviour(i, self, rng);
-
-            log_resource_changes(&old_tile, self, i, log)
+            let result = chosen_behaviour(i, self, rng);
+            log.push_str(&result.ok().unwrap())
         }
     }
-}
-
-fn log_resource_changes(initial_tile: &Tile, new_tile: &Tile, actor_index: usize, log: &mut String,) {
-    for (resource, &initial_amount) in initial_tile.resources.iter() {
-        let new_amount = new_tile.resources.get(resource).unwrap_or(&0);
-        if initial_amount != *new_amount {
-            log.push_str(&format!(
-                "Actor {} made tile resource change: {:?} {} -> {}\n",
-                actor_index, resource, initial_amount, new_amount
-            ));
-        }
-    }
-
-    let initial_actor = &initial_tile.actors[actor_index];
-    let new_actor = &new_tile.actors[actor_index];
-    for (resource, &initial_amount) in initial_actor.resources.iter() {
-        let new_amount = new_actor.resources.get(resource).unwrap_or(&0);
-        if initial_amount != *new_amount {
-            log.push_str(&format!(
-                "Actor {} resource change: {:?} {} -> {}\n",
-                actor_index, resource, initial_amount, new_amount
-            ));
-        }
-    }
-    
 }
 
 fn possble_to_subtract(value: u32, amount_to_substract: u32) -> bool {
