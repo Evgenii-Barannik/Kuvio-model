@@ -10,10 +10,11 @@ use rand::{Rng, rngs::StdRng, SeedableRng};
 use lazy_static::lazy_static;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
+use plotters::prelude::*;
 use rayon::prelude::*;
 // use rayon::ThreadPoolBuilder;
 
-// This enum exist to support iteration over possibly different datatypes inside variants. 
+// This enum exists to support iteration over possibly different datatypes inside variants. 
 #[derive(Debug, Clone, Hash)]
 enum HyperParam {
     ProbResolution(usize),
@@ -35,8 +36,8 @@ struct HyperParamRanges {
 // Hyperparameter ranges that define region of phase space that we explore.
 lazy_static! {
     static ref HYPERPARAM_RANGES: HyperParamRanges = HyperParamRanges {
-        probability_resolutions: (5..=6).map(HyperParam::ProbResolution).collect_vec(),
-        game_ticks: [4000, 5000].map(HyperParam::GameTicks).to_vec(),
+        probability_resolutions: (6..=6).map(HyperParam::ProbResolution).collect_vec(),
+        game_ticks: [500, 5000].map(HyperParam::GameTicks).to_vec(),
         game_seeds: [2].map(HyperParam::GameSeed).to_vec(),
         resource_collections: INITIAL_RESOURCE_COMBINATIONS.to_vec(),
     };
@@ -62,15 +63,16 @@ enum Resource {
     Reputation,
 }
 
-// TODO Change usize showing Actors place to the Actor reference if Rust borrow checker will allow.
-type BehaviourFn = fn(usize, &mut Tile, &mut StdRng) -> Result<String, String>; 
+type BehaviourFn = fn(usize, &mut Tile, &mut StdRng) -> Result<String, ()>; 
 
 lazy_static! {
     static ref BEHAVIOURS: [BehaviourFn; 3] = 
     [harvest_wood, mine_gold, get_reputation_or_gold];
 }
 
-fn harvest_wood(current_actor_index: usize, tile: &mut Tile, _rng: &mut StdRng) -> Result<String, String> {
+const BEHAVIOUR_NAMES: [&str; 3] = ["harvest_wood", "mine_gold", "get_reputation_or_gold"];
+
+fn harvest_wood(current_actor_index: usize, tile: &mut Tile, _rng: &mut StdRng) -> Result<String, ()> {
     let resource_change: u32 = 1;
     let old_tile_resource_amount = *tile.resources.get(&Resource::Wood).unwrap_or(&0);
     let old_actor_resource_amount = *tile.actors[current_actor_index].resources.get(&Resource::Wood).unwrap_or(&0);
@@ -90,7 +92,7 @@ fn harvest_wood(current_actor_index: usize, tile: &mut Tile, _rng: &mut StdRng) 
     }
 }
 
-fn mine_gold(current_actor_index: usize, tile: &mut Tile, rng: &mut StdRng) -> Result<String, String> {
+fn mine_gold(current_actor_index: usize, tile: &mut Tile, rng: &mut StdRng) -> Result<String, ()> {
     if rng.gen_bool(0.5) { 
         let resource_change: u32 = 1;
         let old_actor_resource_amount = *tile.actors[current_actor_index].resources.get(&Resource::Gold).unwrap_or(&0);
@@ -114,7 +116,7 @@ fn mine_gold(current_actor_index: usize, tile: &mut Tile, rng: &mut StdRng) -> R
     }
 }
 
-fn get_reputation_or_gold(current_actor_index: usize, tile: &mut Tile, _rng: &mut StdRng) -> Result<String, String> {
+fn get_reputation_or_gold(current_actor_index: usize, tile: &mut Tile, _rng: &mut StdRng) -> Result<String, ()> {
     let resource_change: u32 = 1;
     let mut other_actors = tile.actors.clone();
     other_actors.remove(current_actor_index);
@@ -206,6 +208,7 @@ impl Tile {
             // If the resource change is possible (thus behaviour is also possible) for the actor we are currently iterating over, the change will occur.
             // Consequently, other actors may fail in attempting to execute exactly the same behavior in the same game tick due to a lack of resources in the Tile.
             let result = chosen_behaviour(i, self, rng);
+            
             log.push_str(&result.ok().unwrap())
         }
     }
@@ -271,17 +274,12 @@ fn probability_distributions_recursion(
 }
 
     fn log_behaviour_probs<'a>(behaviour_probs: &[Vec<BehaviourProb>], log: &mut String) {
-        let mut function_names = BTreeMap::new();
-        function_names.insert(harvest_wood as *const (), "harvest_wood");
-        function_names.insert(mine_gold as *const (), "mine_gold");
-        function_names.insert(get_reputation_or_gold as *const (), "get_reputation_or_gold");
-    
         log.push_str("Actor ID, Behaviours with probabilities: \n");
     
         for (actor_id, actor_behaviours) in behaviour_probs.iter().enumerate() {
-            let row = actor_behaviours.iter().map(|bp| {
-                let function_ptr = bp.behaviour as *const ();
-                format!("{} ({:.0}%)", function_names.get(&function_ptr).unwrap(), bp.probability * 100.0)
+            let row = actor_behaviours.iter().enumerate().map(|(i, bp)| {
+                let behaviour_name = BEHAVIOUR_NAMES[i];
+                format!("{} ({:.0}%)", behaviour_name, bp.probability * 100.0)
             }).collect::<Vec<String>>().join(", ");
     
             log.push_str(&format!("{}, [{}]\n", actor_id, row));
@@ -323,13 +321,89 @@ macro_rules! for_each_hyperparam_combination {
     }};
 }
 
+fn plot_utility_distribution(utilities: &[f64], behavior_probabilities: &Vec<Vec<f64>>, file_path: &str) {
+    let max_utility = *utilities.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
+    let max_height = 5u32;
+    let bucket_count = 100;
+    
+    let mut buckets = vec![vec![0u32; behavior_probabilities.len()]; bucket_count];
+    for (i, &utility) in utilities.iter().enumerate() {
+        let index = ((utility / max_utility) * (bucket_count as f64 - 1.0)).floor() as usize;
+        let behavior_index = i % behavior_probabilities.len();
+        buckets[index][behavior_index] += 1;
+    }
+
+    let plot = BitMapBackend::new(file_path, (640, 480)).into_drawing_area();
+    plot.fill(&WHITE).unwrap();
+
+    let mut chart = ChartBuilder::on(&plot)
+        .margin(5)
+        .caption("Utility Distribution", ("sans-serif", 30))
+        .x_label_area_size(40)
+        .y_label_area_size(40)
+        .build_cartesian_2d(0.0..max_utility, 0..max_height)
+        .unwrap();
+
+    chart.configure_mesh().x_desc("Utility").y_desc("N").draw().unwrap();
+
+    let bucket_width = max_utility / bucket_count as f64;
+
+    for (index, bucket) in buckets.iter().enumerate() {
+        let mut accumulated_height = 0;
+        for (behavior_index, &count) in bucket.iter().enumerate() {
+            let color = RGBColor(
+                (255.0 * behavior_probabilities[behavior_index][0]) as u8,
+                (255.0 * behavior_probabilities[behavior_index][1]) as u8,
+                (255.0 * behavior_probabilities[behavior_index][2]) as u8,
+            );
+
+            let bar_left = index as f64 * bucket_width;
+            let bar_right = bar_left + bucket_width;
+            let bar_bottom = accumulated_height;
+            let bar_top = accumulated_height + count;
+
+            chart.draw_series(std::iter::once(Rectangle::new(
+                [(bar_left, bar_bottom as u32), (bar_right, bar_top)],
+                color.filled(),
+            ))).unwrap();
+
+            accumulated_height = bar_top;
+        }
+    }
+
+    let (legend_x, legend_y) = (50, 50);
+    let legend_size = 15;
+    let text_gap = 5;
+    let text_size = 15;
+
+    let legend_entries = vec![
+        ("harvest_wood", RED),
+        ("mine_gold", GREEN),
+        ("get_reputation_or_gold", BLUE),
+    ];
+
+    for (i, (label, color)) in legend_entries.iter().enumerate() {
+        let y_position = legend_y + i as i32 * (legend_size + text_gap + text_size);
+
+        plot.draw(&Rectangle::new(
+            [(legend_x, y_position), (legend_x + legend_size, y_position + legend_size)],
+            color.filled(),
+        )).unwrap();
+
+        plot.draw(&Text::new(
+            *label,
+            (legend_x + legend_size + text_gap, y_position + (legend_size / 2)),
+            ("sans-serif", text_size).into_font(),
+        )).unwrap();
+    }
+}
+
 
 fn main() {
     let timer = Instant::now();
     fs::create_dir_all("output").unwrap();
 
     // rayon::ThreadPoolBuilder::new().num_threads(1).build_global().unwrap();
-
         for_each_hyperparam_combination!(|hyperparams: HyperParamCombination| {
             let (num_of_prob_values, num_of_game_ticks, game_seed, ref initial_tile_resources) = hyperparams;
 
@@ -359,7 +433,21 @@ fn main() {
                 log.push_str(&format! ("\n---------- Game tick {} ----------\n", t));
                 tile.execute_behaviour(&mut rng, &mut log);
             }
-            
+
+        let hash = hash_hyper_params(&hyperparams);
+
+        let mut utilities: Vec<f64> = vec![];
+        for actor in &tile.actors {
+            utilities.push(actor.get_utility())
+        }
+        let plot_file_name = format!("output/{}_hist.png", hash);
+
+        let behavior_probabilities: Vec<Vec<f64>> = tile.actors.iter()
+        .map(|actor| actor.behaviours.iter().map(|b| b.probability).collect())
+        .collect();
+
+        plot_utility_distribution(&utilities, &behavior_probabilities, &plot_file_name);
+
         let (winner_index, winner) = tile.actors.iter().enumerate()
         .max_by(|(_, a), (_, b)| a.get_utility().partial_cmp(&b.get_utility()).unwrap_or(std::cmp::Ordering::Equal))
         .unwrap(); 
@@ -367,7 +455,6 @@ fn main() {
         log.push_str(&format!("\nActor with this ID won: {:?}\nActor's resources are: {:?}\nActor's utility is: {:?}",
         winner_index, winner.resources, winner.get_utility()));
 
-        let hash = hash_hyper_params(&hyperparams);
         let file_name = format!("output/{}.txt", hash);
         write(&file_name, log).unwrap();
         });
