@@ -11,7 +11,7 @@ use rand::{Rng, rngs::StdRng, SeedableRng};
 use lazy_static::lazy_static;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
-use plotters::prelude::*;
+use plotters::{coord::Shift, prelude::*};
 use rayon::prelude::*;
 // use rayon::ThreadPoolBuilder;
 
@@ -42,7 +42,7 @@ struct HyperParamRanges {
 lazy_static! {
     static ref HYPERPARAM_RANGES: HyperParamRanges = HyperParamRanges {
         probability_resolutions: (6..=6).map(HyperParam::ProbResolution).collect_vec(),
-        game_ticks: [500, 5000].map(HyperParam::GameTicks).to_vec(),
+        game_ticks: [250].map(HyperParam::GameTicks).to_vec(),
         game_seeds: [2].map(HyperParam::GameSeed).to_vec(),
         resource_collections: INITIAL_RESOURCE_COMBINATIONS.to_vec(),
     };
@@ -50,8 +50,8 @@ lazy_static! {
 
 lazy_static! {
     static ref INITIAL_RESOURCE_COMBINATIONS: Vec<HyperParam> = {
-        let gold_range = (1u32..=4u32).map(|x| 500 * x); 
-        let wood_range = (1u32..=4u32).map(|x| 1000 * x); 
+        let gold_range = (1u32..=1u32).map(|x| 500 * x); 
+        let wood_range = (1u32..=1u32).map(|x| 1000 * x); 
         
         iproduct!(gold_range, wood_range)
         .map(|(gold_amount, wood_amount)| {
@@ -321,57 +321,49 @@ macro_rules! for_each_hyperparam_combination {
                     panic!("Hyperparameters were not parsed correctly.");
                 }
             });
-    }};
-}
-
-fn plot_utility_distribution(actors: &Vec<Actor>, behavior_probabilities: &Vec<Vec<f64>>, file_path: &str) {
+        }};
+    }
+    
+fn plot_utility_distribution(
+    actors: &Vec<Actor>,
+    behavior_probs: &Vec<Vec<f64>>,
+    root: &mut DrawingArea<BitMapBackend<'_>, Shift>,
+    tick_number: usize,
+) {
+        
     let utilities: Vec<f64> = actors.iter()
-        .map(|actor| actor.get_utility())
-        .collect();
+    .map(|actor| actor.get_utility())
+    .collect();
 
     let max_utility: f64 = *utilities.iter()
-        .max_by(|a, b| a.partial_cmp(b).unwrap())
-        .unwrap();
-    
-    let bucket_count = 100;
-    let bucket_width = max_utility / bucket_count as f64;
-    let mut buckets = vec![0u32; bucket_count];
-    let mut actors_to_buckets: BTreeMap<usize, usize> = BTreeMap::new();
-    for (actors_index, utility) in utilities.iter().enumerate() {
-        let bucket_index = ((utility / max_utility) * (bucket_count as f64 - 1.0)).floor() as usize;
-        buckets[bucket_index]+= 1;
-        actors_to_buckets.insert(actors_index, bucket_index);
-    }
-        
+    .max_by(|a, b| a.partial_cmp(b).unwrap())
+    .unwrap();
+
     let plot_height = 5u32;
-
-    let plot = BitMapBackend::new(file_path, (640, 480)).into_drawing_area();
-    plot.fill(&WHITE).unwrap();
-
-    let mut chart = ChartBuilder::on(&plot)
+    root.fill(&WHITE).unwrap();
+    let mut chart = ChartBuilder::on(&root)
         .margin(5)
         .caption("Utility Distribution", ("sans-serif", 30))
         .x_label_area_size(40)
         .y_label_area_size(40)
         .build_cartesian_2d(0.0..max_utility, 0..plot_height)
         .unwrap();
-
     chart.configure_mesh().x_desc("Utility").y_desc("N").draw().unwrap();
 
-
-    let mut accumulated_bucket_heights = vec![0u32; bucket_count];
-    for (actor_index, _actor) in actors.iter().enumerate() {
-        let bucket_index = actors_to_buckets.get(&actor_index).unwrap();
-
+    let bucket_count = 100;
+    let bucket_width = max_utility / bucket_count as f64;
+    let mut buckets = vec![0u32; bucket_count];
+    for (actor_index, utility) in utilities.iter().enumerate() {
+        let bucket_index = ((utility / max_utility) * (bucket_count as f64 - 1.0)).floor() as usize;
         let color = RGBColor(
-            (255.0 * behavior_probabilities[actor_index][0]) as u8,
-            (255.0 * behavior_probabilities[actor_index][1]) as u8,
-            (255.0 * behavior_probabilities[actor_index][2]) as u8,
+            (255.0 * behavior_probs[actor_index][0]) as u8,
+            (255.0 * behavior_probs[actor_index][1]) as u8,
+            (255.0 * behavior_probs[actor_index][2]) as u8,
         );
-        
-        let bar_left = *bucket_index as f64 * bucket_width;
+
+        let bar_left = bucket_index as f64 * bucket_width;
         let bar_right = bar_left + bucket_width;
-        let bar_bottom = accumulated_bucket_heights[*bucket_index];
+        let bar_bottom = buckets[bucket_index];
         let bar_top = bar_bottom + 1;
 
         chart.draw_series(std::iter::once(Rectangle::new(
@@ -379,36 +371,39 @@ fn plot_utility_distribution(actors: &Vec<Actor>, behavior_probabilities: &Vec<V
             color.filled(),
         ))).unwrap();
 
-        accumulated_bucket_heights[*bucket_index] += 1;
+        buckets[bucket_index]+= 1;
     }
-
-    assert!(accumulated_bucket_heights == buckets);
 
     let (legend_x, legend_y) = (50, 50);
     let legend_size = 15;
     let text_gap = 5;
     let text_size = 15;
 
+    let tick_info = format!("Tick: {}", tick_number);
+
     let legend_entries = vec![
         ("harvest_wood", RED),
         ("mine_gold", GREEN),
         ("get_reputation_or_gold", BLUE),
+        (&tick_info, WHITE)
     ];
 
     for (i, (label, color)) in legend_entries.iter().enumerate() {
         let y_position = legend_y + i as i32 * (legend_size + text_gap + text_size);
 
-        plot.draw(&Rectangle::new(
+        root.draw(&Rectangle::new(
             [(legend_x, y_position), (legend_x + legend_size, y_position + legend_size)],
             color.filled(),
         )).unwrap();
 
-        plot.draw(&Text::new(
+        root.draw(&Text::new(
             *label,
             (legend_x + legend_size + text_gap, y_position + (legend_size / 2)),
             ("sans-serif", text_size).into_font(),
         )).unwrap();
     }
+
+    root.present().unwrap();
 }
 
 
@@ -423,27 +418,26 @@ fn main() {
             let mut log = String::new();
             log.push_str(&format!("Number of possible probability values for one behaviour: {},\nTotal game ticks: {},\nGame seed: {:?},\nInitial tile Resources: {:?}\n\n",
             num_of_prob_values, num_of_game_ticks, game_seed, &initial_tile_resources));
-
+            
             let behaviour_probs = generate_probability_distributions(num_of_prob_values);
             log_behaviour_probs(&behaviour_probs, &mut log);
-
+            
             let mut tile = Tile::new(vec![], initial_tile_resources.clone());
             for actors_behaviour_probs in behaviour_probs.iter() {
                 let actor = Actor::new(BTreeMap::new(), actors_behaviour_probs.clone());
+                // Actors should be in the same order as behaviour_probs due to the way actors were created.
                 tile.actors.push(actor);
             }
-        
+            
+            let hash = hash_hyper_params(&hyperparams);
+            let plot_file_name = format!("output/{}.gif", hash);
+            let mut root = BitMapBackend::gif(plot_file_name, (640, 480), 100).unwrap().into_drawing_area();
             let mut rng = StdRng::seed_from_u64(game_seed as u64);
             for t in 0..num_of_game_ticks {
                 log.push_str(&format! ("\n---------- Game tick {} ----------\n", t));
                 tile.execute_behaviour(&mut rng, &mut log);
+                plot_utility_distribution(&tile.actors, &behaviour_probs, &mut root, t);
             }
-
-        let hash = hash_hyper_params(&hyperparams);
-        let plot_file_name = format!("output/{}_hist.png", hash);
-
-        // Actors should be in the same order as behaviour_probs due to the way actors were created.
-        plot_utility_distribution(&tile.actors, &behaviour_probs, &plot_file_name);
 
         let (winner_index, winner) = tile.actors.iter().enumerate()
         .max_by(|(_, a), (_, b)| a.get_utility().partial_cmp(&b.get_utility()).unwrap_or(std::cmp::Ordering::Equal))
