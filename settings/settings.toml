@@ -1,0 +1,7 @@
+[[Hyperparameters]]
+
+game_ticks = [25]
+game_seeds = [2]
+probability_resolutions = [6]
+initial_tile_gold = [500]
+initial_tile_wood = [1000] 

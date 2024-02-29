@@ -12,6 +12,11 @@ use lazy_static::lazy_static;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use plotters::{coord::Shift, prelude::*};
+use std::collections::HashMap;
+use toml::map::Map;
+use toml::{Value, Table};
+use std::path::{Path, PathBuf};
+use walkdir::WalkDir;
 use rayon::prelude::*;
 // use rayon::ThreadPoolBuilder;
 
@@ -19,15 +24,15 @@ use rayon::prelude::*;
 // This is one of three complementary types.
 #[derive(Debug, Clone, Hash)]
 enum HyperParam { 
-    ProbResolution(usize),
-    GameTicks(usize),
+    ProbResolution(u64),
+    GameTicks(u64),
     GameSeed(u64),
-    ResourceCollection(Resources),
+    // ResourceCollection(Resources),
 }
 
 // This tuple exists to make destructuring of current hyperparams more convenient.
 // This is one of three complementary types.
-type HyperParamCombination = (usize, usize, u64, Resources); 
+type HyperParamCombination = (u64, u64, u64); 
 
 /// This is one of three complementary types.
 #[derive(Debug, Clone, Hash)]
@@ -35,31 +40,21 @@ struct HyperParamRanges {
     probability_resolutions: Vec<HyperParam>,
     game_ticks: Vec<HyperParam>,
     game_seeds: Vec<HyperParam>,
-    resource_collections: Vec<HyperParam>,
+    // resource_collections: Vec<HyperParam>,
 }
 
-// Hyperparameter ranges that define region of phase space that we explore.
-lazy_static! {
-    static ref HYPERPARAM_RANGES: HyperParamRanges = HyperParamRanges {
-        probability_resolutions: (6..=6).map(HyperParam::ProbResolution).collect_vec(),
-        game_ticks: [250].map(HyperParam::GameTicks).to_vec(),
-        game_seeds: [2].map(HyperParam::GameSeed).to_vec(),
-        resource_collections: INITIAL_RESOURCE_COMBINATIONS.to_vec(),
-    };
-}
-
-lazy_static! {
-    static ref INITIAL_RESOURCE_COMBINATIONS: Vec<HyperParam> = {
-        let gold_range = (1u32..=1u32).map(|x| 500 * x); 
-        let wood_range = (1u32..=1u32).map(|x| 1000 * x); 
+// lazy_static! {
+//     static ref INITIAL_RESOURCE_COMBINATIONS: Vec<HyperParam> = {
+//         let gold_range = (1u32..=1u32).map(|x| 500 * x); 
+//         let wood_range = (1u32..=1u32).map(|x| 1000 * x); 
         
-        iproduct!(gold_range, wood_range)
-        .map(|(gold_amount, wood_amount)| {
-            HyperParam::ResourceCollection(BTreeMap::from([(Resource::Gold, gold_amount), (Resource::Wood, wood_amount)]))
-        })
-        .collect::<Vec<HyperParam>>()
-    };
-}
+//         iproduct!(gold_range, wood_range)
+//         .map(|(gold_amount, wood_amount)| {
+//             HyperParam::ResourceCollection(BTreeMap::from([(Resource::Gold, gold_amount), (Resource::Wood, wood_amount)]))
+//         })
+//         .collect::<Vec<HyperParam>>()
+//     };
+// }
         
 #[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Hash, Clone, EnumIter)]
 enum Resource {
@@ -225,7 +220,7 @@ fn possble_to_subtract(value: u32, amount_to_substract: u32) -> bool {
     }
 }
 
-fn generate_probability_distributions(actors_in_crossection: usize) -> Vec<Vec<f64>> {
+fn generate_probability_distributions(actors_in_crossection: u64) -> Vec<Vec<f64>> {
     match actors_in_crossection {
         0 => {panic!("There should be at least one actor.")},
         1 => {
@@ -240,7 +235,7 @@ fn generate_probability_distributions(actors_in_crossection: usize) -> Vec<Vec<f
                 &mut probabilities_for_all_actors,
                 &mut Vec::new(),
                 actors_in_crossection - 1,
-                BEHAVIOURS.len() - 1,
+                (BEHAVIOURS.len() - 1).try_into().unwrap(),
                 actors_in_crossection,
             );
             
@@ -252,9 +247,9 @@ fn generate_probability_distributions(actors_in_crossection: usize) -> Vec<Vec<f
 fn probability_distributions_recursion(
     probabilities_for_all_actors: &mut Vec<Vec<f64>>,
     probabilities_for_actor: &mut Vec<f64>,
-    remaining_probability_steps: usize,
-    remaining_recursion_depth: usize,
-    actors_in_crossection: usize,
+    remaining_probability_steps: u64,
+    remaining_recursion_depth: u64,
+    actors_in_crossection: u64,
 ) {
     let probability_step: f64 = 1.0 / (actors_in_crossection - 1) as f64;
     if remaining_recursion_depth == 0 {
@@ -276,21 +271,19 @@ fn probability_distributions_recursion(
     }
 }
 
-    fn log_behaviour_probs(behaviour_probs: &Vec<Vec<f64>>, log: &mut String) {
-        log.push_str("Actor ID, Behaviours with probabilities: \n");
-    
-        for (actor_number, actor_behaviours) in behaviour_probs.iter().enumerate() {
-            let row = actor_behaviours.iter().enumerate().map(|(i, behaviour_probability)| {
-                let behaviour_name = BEHAVIOUR_NAMES[i];
-                format!("{} ({:.0}%)", behaviour_name, behaviour_probability * 100.0)
-            }).collect::<Vec<String>>().join(", ");
-    
-            log.push_str(&format!("{}, [{}]\n", actor_number, row));
-        }
-        log.push_str("\n");
-    }
-    
+fn log_behaviour_probs(behaviour_probs: &Vec<Vec<f64>>, log: &mut String) {
+    log.push_str("Actor ID, Behaviours with probabilities: \n");
 
+    for (actor_number, actor_behaviours) in behaviour_probs.iter().enumerate() {
+        let row = actor_behaviours.iter().enumerate().map(|(i, behaviour_probability)| {
+            let behaviour_name = BEHAVIOUR_NAMES[i];
+            format!("{} ({:.0}%)", behaviour_name, behaviour_probability * 100.0)
+        }).collect::<Vec<String>>().join(", ");
+
+        log.push_str(&format!("{}, [{}]\n", actor_number, row));
+    }
+    log.push_str("\n");
+}
 
 fn hash_hyper_params(hyper_params: &HyperParamCombination) -> u64 {
     let mut hasher = DefaultHasher::new();
@@ -300,10 +293,13 @@ fn hash_hyper_params(hyper_params: &HyperParamCombination) -> u64 {
 
 macro_rules! for_each_hyperparam_combination {
     ($callback:expr) => {{
-        vec![&HYPERPARAM_RANGES.probability_resolutions,
-             &HYPERPARAM_RANGES.game_ticks,
-             &HYPERPARAM_RANGES.game_seeds,
-             &HYPERPARAM_RANGES.resource_collections]
+        let hps = read_settings_toml().unwrap();
+
+        vec![&hps.probability_resolutions,
+             &hps.game_ticks,
+             &hps.game_seeds,
+            //  &HYPERPARAM_RANGES.resource_collections
+             ]
             .into_iter()
             .multi_cartesian_product()
             .collect::<Vec<_>>()
@@ -312,10 +308,10 @@ macro_rules! for_each_hyperparam_combination {
                 if let [HyperParam::ProbResolution(probability_resolutions),
                         HyperParam::GameTicks(game_ticks),
                         HyperParam::GameSeed(game_seeds),
-                        HyperParam::ResourceCollection(resource_collections)
+                        // HyperParam::ResourceCollection(resource_collections)
                        ] = &hyperparams[..] {
                     
-                    $callback((*probability_resolutions, *game_ticks, *game_seeds, resource_collections.clone()));
+                    $callback((*probability_resolutions, *game_ticks, *game_seeds));
 
                 } else {
                     panic!("Hyperparameters were not parsed correctly.");
@@ -406,6 +402,63 @@ fn plot_utility_distribution(
     root.present().unwrap();
 }
 
+pub fn try_to_read_field_as_vec(map: &Map<String, Value>, key: &str) -> Option<Vec<u64>> {
+    map.get(key).and_then(|value| match value {
+        Value::Array(arr) => Some(arr.iter().filter_map(Value::as_integer).map(|num| num as u64).collect()),
+        _ => None,
+    })
+}
+
+fn read_settings_toml() -> Option<HyperParamRanges> {
+    let toml_files: Vec<PathBuf> = WalkDir::new("settings")
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| 
+            entry.file_type().is_file() &&
+            entry.file_name().to_string_lossy().ends_with(".toml"))
+        .map(|entry| entry.into_path() )
+        .collect();
+    
+    for file in &toml_files {
+        if file.file_name().unwrap() == "settings.toml" {
+            println!("{:?} found", file);
+            let contents = fs::read_to_string(file).unwrap();
+            let toml_map: Value = contents.parse().unwrap();
+    
+            if let Some(Value::Array(hp_map)) = toml_map.get("Hyperparameters") {
+                for hp in hp_map {
+                    let game_seeds = read_hyperparameter_vec(hp, "game_seeds").unwrap();
+                    let game_ticks = read_hyperparameter_vec(hp, "game_ticks").unwrap();
+                    let probability_resolutions = read_hyperparameter_vec(hp, "probability_resolutions").unwrap();
+                    let initial_tile_gold = read_hyperparameter_vec(hp, "initial_tile_gold");
+                    let initial_tile_wood = read_hyperparameter_vec(hp, "initial_tile_wood");
+
+                    let hp_ranges = HyperParamRanges {
+                        game_seeds: game_seeds.into_iter().map(HyperParam::GameSeed).collect_vec(),
+                        game_ticks: game_ticks.into_iter().map(HyperParam::GameTicks).collect_vec(),
+                        probability_resolutions: probability_resolutions.into_iter().map(HyperParam::ProbResolution).collect(),
+                    };
+
+                    return Some(hp_ranges)
+                }
+            }
+        
+        }
+    } 
+    return None
+}
+    
+fn read_hyperparameter_vec(hyperparameter: &Value, key: &str) -> Option<Vec<u64>> {
+    if let Some(Value::Array(values)) = hyperparameter.get(key) {
+        let extracted_values: Vec<u64> = values.iter().filter_map(|v| {
+            if let Value::Integer(value) = v { Some(*value as u64) } else { None }
+        }).collect();
+        println!("Read {}: {:?}", key, extracted_values);
+        return Some(extracted_values)
+    }
+    else {None}
+}
+
 
 fn main() {
     let timer = Instant::now();
@@ -413,8 +466,9 @@ fn main() {
 
     // rayon::ThreadPoolBuilder::new().num_threads(1).build_global().unwrap();
         for_each_hyperparam_combination!(|hyperparams: HyperParamCombination| {
-            let (num_of_prob_values, num_of_game_ticks, game_seed, ref initial_tile_resources) = hyperparams;
+            let (num_of_prob_values, num_of_game_ticks, game_seed) = hyperparams;
 
+            let initial_tile_resources = BTreeMap::from([(Resource::Gold, 500), (Resource::Wood, 1000)]);
             let mut log = String::new();
             log.push_str(&format!("Number of possible probability values for one behaviour: {},\nTotal game ticks: {},\nGame seed: {:?},\nInitial tile Resources: {:?}\n\n",
             num_of_prob_values, num_of_game_ticks, game_seed, &initial_tile_resources));
@@ -436,7 +490,7 @@ fn main() {
             for t in 0..num_of_game_ticks {
                 log.push_str(&format! ("\n---------- Game tick {} ----------\n", t));
                 tile.execute_behaviour(&mut rng, &mut log);
-                plot_utility_distribution(&tile.actors, &behaviour_probs, &mut root, t);
+                plot_utility_distribution(&tile.actors, &behaviour_probs, &mut root, (t as u64).try_into().unwrap());
             }
 
         let (winner_index, winner) = tile.actors.iter().enumerate()
@@ -452,3 +506,4 @@ fn main() {
 
     println!("Execution time: {:?}", timer.elapsed());
 }
+    
