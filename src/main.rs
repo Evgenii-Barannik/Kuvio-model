@@ -4,57 +4,46 @@ use std::vec;
 use std::collections::{BTreeMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::fs::write;
-use itertools::{iproduct, Itertools};
+use itertools::Itertools;
 use std::iter::zip;
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::{Rng, rngs::StdRng, SeedableRng};
-use lazy_static::lazy_static;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use plotters::{coord::Shift, prelude::*};
-use std::collections::HashMap;
 use toml::map::Map;
-use toml::{Value, Table};
-use std::path::{Path, PathBuf};
+use toml::Value;
+use std::path::PathBuf;
 use walkdir::WalkDir;
 use rayon::prelude::*;
 // use rayon::ThreadPoolBuilder;
 
-// This enum exists to support iteration over possibly different datatypes inside variants.
+// This enum exists to support iteration over possibly different types inside variants.
 // This is one of three complementary types.
 #[derive(Debug, Clone, Hash)]
 enum HyperParam { 
-    ProbResolution(u64),
-    GameTicks(u64),
-    GameSeed(u64),
-    // ResourceCollection(Resources),
+    // This variant can be made to contain usize num, (that can be cast to u64 before use because u64 is required),
+    // but we want to retain type variability for hyperparameters anyway.
+    GameSeed(u64), 
+    GameTickCount(usize),
+    ProbabilityResolution(usize),
+    InitialTileGold(usize),
+    InitialTileWood(usize),
 }
 
-// This tuple exists to make destructuring of current hyperparams more convenient.
+// This tuple exists to make destructuring of hyperparameter combinations more convenient.
 // This is one of three complementary types.
-type HyperParamCombination = (u64, u64, u64); 
+type HyperParamCombination = (u64, usize, usize, usize, usize); 
 
 /// This is one of three complementary types.
 #[derive(Debug, Clone, Hash)]
 struct HyperParamRanges { 
-    probability_resolutions: Vec<HyperParam>,
-    game_ticks: Vec<HyperParam>,
-    game_seeds: Vec<HyperParam>,
-    // resource_collections: Vec<HyperParam>,
+    game_seed_values: Vec<HyperParam>,
+    game_tick_count_values: Vec<HyperParam>,
+    probability_resolution_values: Vec<HyperParam>,
+    initial_tile_gold_values: Vec<HyperParam>,
+    initial_tile_wood_values: Vec<HyperParam>,
 }
-
-// lazy_static! {
-//     static ref INITIAL_RESOURCE_COMBINATIONS: Vec<HyperParam> = {
-//         let gold_range = (1u32..=1u32).map(|x| 500 * x); 
-//         let wood_range = (1u32..=1u32).map(|x| 1000 * x); 
-        
-//         iproduct!(gold_range, wood_range)
-//         .map(|(gold_amount, wood_amount)| {
-//             HyperParam::ResourceCollection(BTreeMap::from([(Resource::Gold, gold_amount), (Resource::Wood, wood_amount)]))
-//         })
-//         .collect::<Vec<HyperParam>>()
-//     };
-// }
         
 #[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Hash, Clone, EnumIter)]
 enum Resource {
@@ -64,16 +53,11 @@ enum Resource {
 }
 
 type BehaviourFn = fn(usize, &mut Tile, &mut StdRng) -> Result<String, ()>; 
-
-lazy_static! {
-    static ref BEHAVIOURS: [BehaviourFn; 3] = 
-    [harvest_wood, mine_gold, get_reputation_or_gold];
-}
-
+const BEHAVIOURS: [BehaviourFn; 3] = [harvest_wood, mine_gold, get_reputation_or_gold];
 const BEHAVIOUR_NAMES: [&str; 3] = ["harvest_wood", "mine_gold", "get_reputation_or_gold"];
 
 fn harvest_wood(current_actor_index: usize, tile: &mut Tile, _rng: &mut StdRng) -> Result<String, ()> {
-    let resource_change: u32 = 1;
+    let resource_change: usize = 1;
     let old_tile_resource_amount = *tile.resources.get(&Resource::Wood).unwrap_or(&0);
     let old_actor_resource_amount = *tile.actors[current_actor_index].resources.get(&Resource::Wood).unwrap_or(&0);
 
@@ -94,7 +78,7 @@ fn harvest_wood(current_actor_index: usize, tile: &mut Tile, _rng: &mut StdRng) 
 
 fn mine_gold(current_actor_index: usize, tile: &mut Tile, rng: &mut StdRng) -> Result<String, ()> {
     if rng.gen_bool(0.5) { 
-        let resource_change: u32 = 1;
+        let resource_change: usize = 1;
         let old_actor_resource_amount = *tile.actors[current_actor_index].resources.get(&Resource::Gold).unwrap_or(&0);
         let old_tile_resource_amount = *tile.resources.entry(Resource::Gold).or_insert(0);
 
@@ -117,7 +101,7 @@ fn mine_gold(current_actor_index: usize, tile: &mut Tile, rng: &mut StdRng) -> R
 }
 
 fn get_reputation_or_gold(current_actor_index: usize, tile: &mut Tile, _rng: &mut StdRng) -> Result<String, ()> {
-    let resource_change: u32 = 1;
+    let resource_change: usize = 1;
     let mut other_actors = tile.actors.clone();
     other_actors.remove(current_actor_index);
 
@@ -137,7 +121,7 @@ fn get_reputation_or_gold(current_actor_index: usize, tile: &mut Tile, _rng: &mu
     }
 }
 
-type Resources = BTreeMap<Resource, u32>;
+type Resources = BTreeMap<Resource, usize>;
 
 #[derive(Debug, Clone)]
 struct BehaviourProb {
@@ -212,7 +196,7 @@ impl Tile {
     }
 }
 
-fn possble_to_subtract(value: u32, amount_to_substract: u32) -> bool {
+fn possble_to_subtract(value: usize, amount_to_substract: usize) -> bool {
     if amount_to_substract > value {
         false
     } else {
@@ -220,9 +204,9 @@ fn possble_to_subtract(value: u32, amount_to_substract: u32) -> bool {
     }
 }
 
-fn generate_probability_distributions(actors_in_crossection: u64) -> Vec<Vec<f64>> {
-    match actors_in_crossection {
-        0 => {panic!("There should be at least one actor.")},
+fn generate_probability_distributions(number_of_probability_values: usize) -> Vec<Vec<f64>> {
+    match number_of_probability_values {
+        0 => {panic!("There should be at least one probability value in range.")},
         1 => {
             let len = BEHAVIOURS.len();
             let probabilities_for_actor = vec![vec![1.0/(len as f64); len]];
@@ -234,9 +218,9 @@ fn generate_probability_distributions(actors_in_crossection: u64) -> Vec<Vec<f64
             probability_distributions_recursion(
                 &mut probabilities_for_all_actors,
                 &mut Vec::new(),
-                actors_in_crossection - 1,
-                (BEHAVIOURS.len() - 1).try_into().unwrap(),
-                actors_in_crossection,
+                number_of_probability_values - 1,
+                BEHAVIOURS.len() - 1,
+                number_of_probability_values,
             );
             
             probabilities_for_all_actors
@@ -247,11 +231,11 @@ fn generate_probability_distributions(actors_in_crossection: u64) -> Vec<Vec<f64
 fn probability_distributions_recursion(
     probabilities_for_all_actors: &mut Vec<Vec<f64>>,
     probabilities_for_actor: &mut Vec<f64>,
-    remaining_probability_steps: u64,
-    remaining_recursion_depth: u64,
-    actors_in_crossection: u64,
+    remaining_probability_steps: usize,
+    remaining_recursion_depth: usize,
+    number_of_probability_values: usize,
 ) {
-    let probability_step: f64 = 1.0 / (actors_in_crossection - 1) as f64;
+    let probability_step: f64 = 1.0 / (number_of_probability_values - 1) as f64;
     if remaining_recursion_depth == 0 {
         let mut probabilities_for_storage = probabilities_for_actor.clone();
         probabilities_for_storage.push(remaining_probability_steps as f64 * probability_step);
@@ -265,7 +249,7 @@ fn probability_distributions_recursion(
                 &mut probabilities_for_recursion, 
                 remaining_probability_steps - i, 
                 remaining_recursion_depth - 1,
-                actors_in_crossection,
+                number_of_probability_values,
             );
         }
     }
@@ -294,25 +278,32 @@ fn hash_hyper_params(hyper_params: &HyperParamCombination) -> u64 {
 macro_rules! for_each_hyperparam_combination {
     ($callback:expr) => {{
         let hps = read_settings_toml().unwrap();
-
-        vec![&hps.probability_resolutions,
-             &hps.game_ticks,
-             &hps.game_seeds,
-            //  &HYPERPARAM_RANGES.resource_collections
+        vec![
+             &hps.game_seed_values,
+             &hps.game_tick_count_values,
+             &hps.probability_resolution_values,
+             &hps.initial_tile_gold_values,
+             &hps.initial_tile_wood_values,
              ]
             .into_iter()
             .multi_cartesian_product()
             .collect::<Vec<_>>()
             .into_par_iter()
             .for_each(|hyperparams| {
-                if let [HyperParam::ProbResolution(probability_resolutions),
-                        HyperParam::GameTicks(game_ticks),
-                        HyperParam::GameSeed(game_seeds),
-                        // HyperParam::ResourceCollection(resource_collections)
+                if let [
+                        HyperParam::GameSeed(game_seed),
+                        HyperParam::GameTickCount(game_tick_count),
+                        HyperParam::ProbabilityResolution(probability_resolution),
+                        HyperParam::InitialTileGold(initial_tile_gold),
+                        HyperParam::InitialTileWood(initial_tile_wood), 
                        ] = &hyperparams[..] {
-                    
-                    $callback((*probability_resolutions, *game_ticks, *game_seeds));
-
+                        
+                        $callback((
+                            *game_seed,
+                            *game_tick_count,
+                            *probability_resolution,
+                            *initial_tile_gold,
+                            *initial_tile_wood));
                 } else {
                     panic!("Hyperparameters were not parsed correctly.");
                 }
@@ -402,9 +393,9 @@ fn plot_utility_distribution(
     root.present().unwrap();
 }
 
-pub fn try_to_read_field_as_vec(map: &Map<String, Value>, key: &str) -> Option<Vec<u64>> {
+pub fn try_to_read_field_as_vec(map: &Map<String, Value>, key: &str) -> Option<Vec<usize>> {
     map.get(key).and_then(|value| match value {
-        Value::Array(arr) => Some(arr.iter().filter_map(Value::as_integer).map(|num| num as u64).collect()),
+        Value::Array(arr) => Some(arr.iter().filter_map(Value::as_integer).map(|num| num as usize).collect()),
         _ => None,
     })
 }
@@ -427,16 +418,28 @@ fn read_settings_toml() -> Option<HyperParamRanges> {
     
             if let Some(Value::Array(hp_map)) = toml_map.get("Hyperparameters") {
                 for hp in hp_map {
-                    let game_seeds = read_hyperparameter_vec(hp, "game_seeds").unwrap();
-                    let game_ticks = read_hyperparameter_vec(hp, "game_ticks").unwrap();
-                    let probability_resolutions = read_hyperparameter_vec(hp, "probability_resolutions").unwrap();
-                    let initial_tile_gold = read_hyperparameter_vec(hp, "initial_tile_gold");
-                    let initial_tile_wood = read_hyperparameter_vec(hp, "initial_tile_wood");
+                    let game_seed_values = read_hyperparameter_vec(hp, "game_seed_values")
+                        .expect("File settings.toml must contain game_seed_values with at least value.")
+                        .into_iter().map(|seed| HyperParam::GameSeed(seed as u64)).collect();
+                    let game_tick_count_values = read_hyperparameter_vec(hp, "game_tick_count_values")
+                        .expect("File settings.toml must contain game_tick_count_values with at least value.")
+                        .into_iter().map(HyperParam::GameTickCount).collect();
+                    let probability_resolution_values = read_hyperparameter_vec(hp, "probability_resolution_values")
+                        .expect("File settings.toml must contain probability_resolution_values with at least value.")
+                        .into_iter().map(HyperParam::ProbabilityResolution).collect();
+                    let initial_tile_gold_values = read_hyperparameter_vec(hp, "initial_tile_gold_values")
+                        .expect("File settings.toml must contain initial_tile_gold_values with at least value.")
+                        .into_iter().map(HyperParam::InitialTileGold).collect();
+                    let initial_tile_wood_values = read_hyperparameter_vec(hp, "initial_tile_wood_values")
+                        .expect("File settings.toml must contain initial_tile_wood_values with at least value.")
+                        .into_iter().map(HyperParam::InitialTileWood).collect();
 
                     let hp_ranges = HyperParamRanges {
-                        game_seeds: game_seeds.into_iter().map(HyperParam::GameSeed).collect_vec(),
-                        game_ticks: game_ticks.into_iter().map(HyperParam::GameTicks).collect_vec(),
-                        probability_resolutions: probability_resolutions.into_iter().map(HyperParam::ProbResolution).collect(),
+                        game_seed_values,
+                        game_tick_count_values,
+                        probability_resolution_values,
+                        initial_tile_gold_values,
+                        initial_tile_wood_values,
                     };
 
                     return Some(hp_ranges)
@@ -445,16 +448,16 @@ fn read_settings_toml() -> Option<HyperParamRanges> {
         
         }
     } 
-    return None
+    None
 }
     
-fn read_hyperparameter_vec(hyperparameter: &Value, key: &str) -> Option<Vec<u64>> {
+fn read_hyperparameter_vec(hyperparameter: &Value, key: &str) -> Option<Vec<usize>> {
     if let Some(Value::Array(values)) = hyperparameter.get(key) {
-        let extracted_values: Vec<u64> = values.iter().filter_map(|v| {
-            if let Value::Integer(value) = v { Some(*value as u64) } else { None }
+        let extracted_values: Vec<usize> = values.iter().filter_map(|v| {
+            if let Value::Integer(value) = v { Some(*value as usize) } else { None }
         }).collect();
-        println!("Read {}: {:?}", key, extracted_values);
-        return Some(extracted_values)
+        println!("{}: {:?}", key, extracted_values);
+        Some(extracted_values)
     }
     else {None}
 }
@@ -466,14 +469,14 @@ fn main() {
 
     // rayon::ThreadPoolBuilder::new().num_threads(1).build_global().unwrap();
         for_each_hyperparam_combination!(|hyperparams: HyperParamCombination| {
-            let (num_of_prob_values, num_of_game_ticks, game_seed) = hyperparams;
+            let (game_seed, game_tick, probability_resolution, initial_tile_gold, initial_tile_wood) = hyperparams;
 
-            let initial_tile_resources = BTreeMap::from([(Resource::Gold, 500), (Resource::Wood, 1000)]);
+            let initial_tile_resources = BTreeMap::from([(Resource::Gold, initial_tile_gold), (Resource::Wood, initial_tile_wood)]);
             let mut log = String::new();
             log.push_str(&format!("Number of possible probability values for one behaviour: {},\nTotal game ticks: {},\nGame seed: {:?},\nInitial tile Resources: {:?}\n\n",
-            num_of_prob_values, num_of_game_ticks, game_seed, &initial_tile_resources));
+            probability_resolution, game_tick, game_seed, &initial_tile_resources));
             
-            let behaviour_probs = generate_probability_distributions(num_of_prob_values);
+            let behaviour_probs = generate_probability_distributions(probability_resolution);
             log_behaviour_probs(&behaviour_probs, &mut log);
             
             let mut tile = Tile::new(vec![], initial_tile_resources.clone());
@@ -487,7 +490,7 @@ fn main() {
             let plot_file_name = format!("output/{}.gif", hash);
             let mut root = BitMapBackend::gif(plot_file_name, (640, 480), 100).unwrap().into_drawing_area();
             let mut rng = StdRng::seed_from_u64(game_seed as u64);
-            for t in 0..num_of_game_ticks {
+            for t in 0..game_tick {
                 log.push_str(&format! ("\n---------- Game tick {} ----------\n", t));
                 tile.execute_behaviour(&mut rng, &mut log);
                 plot_utility_distribution(&tile.actors, &behaviour_probs, &mut root, (t as u64).try_into().unwrap());
