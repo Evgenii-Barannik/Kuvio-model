@@ -424,7 +424,7 @@ fn read_config() -> (HyperParamRanges, Settings) {
     
     for file in &toml_files {
         if file.file_name().unwrap() == "config.toml" {
-            println!("{:?} found", file);
+            println!("File {:?} found", file);
             let toml_map: Value = fs::read_to_string(file).unwrap().parse().unwrap();
 
             if let Some(Value::Array(settings_map)) = toml_map.get("Settings") {
@@ -495,53 +495,50 @@ fn main() {
     fs::create_dir_all("output").unwrap();
 
     // rayon::ThreadPoolBuilder::new().num_threads(1).build_global().unwrap();
-        for_each_hyperparam_combination!(|(hyperparams, settings): (HyperParamCombination, Settings)| {
-            let (game_seed, game_tick_count, probability_resolution, initial_tile_gold, initial_tile_wood) = hyperparams;
-            let initial_tile_resources = BTreeMap::from([(Resource::Gold, initial_tile_gold), (Resource::Wood, initial_tile_wood)]);
-            let behaviour_probs = generate_probability_distributions(probability_resolution);
-            
-            let mut log = String::new();
-            if settings.print_game_logs {
-                log.push_str(&format!("Number of possible probability values for one behaviour: {},\nTotal game ticks: {},\nGame seed: {:?},\nInitial tile Resources: {:?}\n\n",
-                probability_resolution, game_tick_count, game_seed, &initial_tile_resources));
-                log_behaviour_probs(&behaviour_probs, &mut log);
-            }
-            
-            // Actors should be in the same order as behaviour_probs due to the way actors were created.
-            let mut tile = Tile::new(vec![], initial_tile_resources.clone());
-            for actors_behaviour_probs in behaviour_probs.iter() {
-                let actor = Actor::new(BTreeMap::new(), actors_behaviour_probs.clone());
-                tile.actors.push(actor);
-            }
-            
-            let hash = hash_hyper_params(&hyperparams);
-            let plot_file_name = format!("output/{}.gif", hash);
-            let mut root = BitMapBackend::gif(plot_file_name, (640, 480), 100).unwrap().into_drawing_area();
-            let mut rng = StdRng::seed_from_u64(game_seed as u64);
+    for_each_hyperparam_combination!(|(hyperparams, settings): (HyperParamCombination, Settings)| {
+        let (game_seed, game_tick_count, probability_resolution, initial_tile_gold, initial_tile_wood) = hyperparams;
+        let initial_tile_resources = BTreeMap::from([(Resource::Gold, initial_tile_gold), (Resource::Wood, initial_tile_wood)]);
+        let behaviour_probs = generate_probability_distributions(probability_resolution);
+        
+        let mut log = String::new();
+        if settings.print_game_logs {
+            log.push_str(&format!("Number of possible probability values for one behaviour: {},\nTotal game ticks: {},\nGame seed: {:?},\nInitial tile Resources: {:?}\n\n",
+            probability_resolution, game_tick_count, game_seed, &initial_tile_resources));
+            log_behaviour_probs(&behaviour_probs, &mut log);
+        }
+        
+        // Actors should be in the same order as behaviour_probs due to the way actors were created.
+        let mut tile = Tile::new(vec![], initial_tile_resources.clone());
+        for actors_behaviour_probs in behaviour_probs.iter() {
+            let actor = Actor::new(BTreeMap::new(), actors_behaviour_probs.clone());
+            tile.actors.push(actor);
+        }
+        
+        let hash = hash_hyper_params(&hyperparams);
+        let plot_file_name = format!("output/{}.gif", hash);
+        let mut root = BitMapBackend::gif(plot_file_name, (640, 480), 100).unwrap().into_drawing_area();
+        let mut rng = StdRng::seed_from_u64(game_seed as u64);
 
-            for tick in 0..game_tick_count {
-                tile.execute_behaviour(&mut rng, &mut log); 
-
-                if settings.print_game_logs {
-                    log.push_str(&format! ("\n---------- Game tick {} ----------\n", tick));
-                }
-                if (tick % settings.plotting_frame_subselection_factor) == 0 {
-                    plot_utility_distribution(&tile.actors, &behaviour_probs, &mut root, (tick as u64).try_into().unwrap());
-                }
+        for tick in 0..game_tick_count {
+            tile.execute_behaviour(&mut rng, &mut log); 
+            log.push_str(&format! ("\n---------- Game tick {} ----------\n", tick));
+            if (tick % settings.plotting_frame_subselection_factor) == 0 {
+                plot_utility_distribution(&tile.actors, &behaviour_probs, &mut root, (tick as u64).try_into().unwrap());
             }
-
-        let (winner_index, winner) = tile.actors.iter().enumerate()
-        .max_by(|(_, a), (_, b)| a.get_utility().partial_cmp(&b.get_utility()).unwrap_or(std::cmp::Ordering::Equal))
-        .unwrap(); 
+        }
         
         if settings.print_game_logs {
+            let (winner_index, winner) = tile.actors.iter().enumerate()
+            .max_by(|(_, a), (_, b)| a.get_utility().partial_cmp(&b.get_utility()).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap();
+        
             log.push_str(&format!("\nActor with this ID won: {:?}\nActor's resources are: {:?}\nActor's utility is: {:?}",
             winner_index, winner.resources, winner.get_utility()));
     
             let file_name = format!("output/{}.txt", hash);
             write(&file_name, log).unwrap();
         }
-        });
+    });
 
     println!("Execution time: {:?}", timer.elapsed());
 }

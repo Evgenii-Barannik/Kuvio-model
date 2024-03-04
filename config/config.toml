@@ -2,12 +2,12 @@
 
 game_tick_count_values = [500]
 game_seed_values = [2]
-probability_resolution_values = [6]
-initial_tile_gold_values = [0, 5000]
-initial_tile_wood_values = [9]
+probability_resolution_values = [7]
+initial_tile_gold_values = [0, 2500]
+initial_tile_wood_values = [0, 2500]
 
 
 [[Settings]]
 
-plotting_frame_subselection_factor = 10
+plotting_frame_subselection_factor = 20
 print_game_logs = true
