@@ -277,9 +277,7 @@ fn hash_hyper_params(hyper_params: &HyperParamCombination) -> u64 {
 
 macro_rules! for_each_hyperparam_combination {
     ($callback:expr) => {{
-        let (hps_unchecked, settings) = read_config();
-        let hps = hps_unchecked.unwrap();
-
+        let (hps, settings) = read_config();
         vec![
              &hps.game_seed_values,
              &hps.game_tick_count_values,
@@ -405,11 +403,12 @@ pub fn try_to_read_field_as_vec(map: &Map<String, Value>, key: &str) -> Option<V
 
 #[derive(Debug, Clone)]
 struct Settings {
-    plotting_frame_subselectecion_factor: usize,
+    plotting_frame_subselection_factor: usize,
+    print_game_logs: bool,
 }
 
-fn read_config() -> (Option<HyperParamRanges>, Settings) {
-    let toml_files: Vec<PathBuf> = WalkDir::new("config")
+fn read_config() -> (HyperParamRanges, Settings) {
+    let toml_files: Vec<PathBuf> = WalkDir::new(".")
         .into_iter()
         .filter_map(Result::ok)
         .filter(|entry| 
@@ -418,39 +417,50 @@ fn read_config() -> (Option<HyperParamRanges>, Settings) {
         .map(|entry| entry.into_path() )
         .collect();
 
-    let mut settings = Settings { // Default settings
-        plotting_frame_subselectecion_factor: 1usize,
+    let mut settings = Settings { 
+        plotting_frame_subselection_factor: 1usize, // Default values
+        print_game_logs: true, // Default values
     };
     
     for file in &toml_files {
         if file.file_name().unwrap() == "config.toml" {
             println!("{:?} found", file);
-            let contents = fs::read_to_string(file).unwrap();
-            let toml_map: Value = contents.parse().unwrap();
+            let toml_map: Value = fs::read_to_string(file).unwrap().parse().unwrap();
 
             if let Some(Value::Array(settings_map)) = toml_map.get("Settings") {
                 for setting in settings_map {
-                    settings.plotting_frame_subselectecion_factor = read_usize_setting_entry(setting, "plotting_frame_subselectecion_factor")
-                    .expect("File config.toml contains incorrect entry for plotting_frame_subselectecion_factor.");
+
+                    let setting1 = "plotting_frame_subselection_factor";
+                    let setting2 = "print_game_logs";
+                    if let Some(value) = setting.get(setting1) {
+                        let extracted_value = value.as_integer().unwrap() as usize;
+                        settings.plotting_frame_subselection_factor = extracted_value;
+                        println!("{}: {:?}", setting1, extracted_value);
+                    }
+                    if let Some(value) = setting.get(setting2) {
+                        let extracted_value = value.as_bool().unwrap();
+                        settings.print_game_logs = extracted_value;
+                        println!("{}: {:?}", setting2, extracted_value);
+                    }
                 };
             }
             
             if let Some(Value::Array(hp_map)) = toml_map.get("Hyperparameters") {
                 for hp in hp_map {
-                    let game_seed_values = read_hyperparameter_vec(hp, "game_seed_values")
-                        .expect("File config.toml should contain game_seed_values with at least value.")
+                    let game_seed_values = read_vec_entry(hp, "game_seed_values")
+                        .expect("File config.toml should contain game_seed_values entry in [[Hyperparameters]] with at least one usize value in list.")
                         .into_iter().map(|seed| HyperParam::GameSeed(seed as u64)).collect();
-                    let game_tick_count_values = read_hyperparameter_vec(hp, "game_tick_count_values")
-                        .expect("File config.toml should contain game_tick_count_values with at least value.")
+                    let game_tick_count_values = read_vec_entry(hp, "game_tick_count_values")
+                        .expect("File config.toml should contain game_tick_count_values entry in [[Hyperparameters]] with at least one usize value in list.")
                         .into_iter().map(HyperParam::GameTickCount).collect();
-                    let probability_resolution_values = read_hyperparameter_vec(hp, "probability_resolution_values")
-                        .expect("File config.toml should contain probability_resolution_values with at least value.")
+                    let probability_resolution_values = read_vec_entry(hp, "probability_resolution_values")
+                        .expect("File config.toml should contain probability_resolution_values entry in [[Hyperparameters]] with at least one usize value in list.")
                         .into_iter().map(HyperParam::ProbabilityResolution).collect();
-                    let initial_tile_gold_values = read_hyperparameter_vec(hp, "initial_tile_gold_values")
-                        .expect("File config.toml should contain initial_tile_gold_values with at least value.")
+                    let initial_tile_gold_values = read_vec_entry(hp, "initial_tile_gold_values")
+                        .expect("File config.toml should contain initial_tile_gold_values entry in [[Hyperparameters]] with at least one usize value in list.")
                         .into_iter().map(HyperParam::InitialTileGold).collect();
-                    let initial_tile_wood_values = read_hyperparameter_vec(hp, "initial_tile_wood_values")
-                        .expect("File config.toml should contain initial_tile_wood_values with at least value.")
+                    let initial_tile_wood_values = read_vec_entry(hp, "initial_tile_wood_values")
+                        .expect("File config.toml should contain initial_tile_wood_values entry in [[Hyperparameters]] with at least one usize value in list.")
                         .into_iter().map(HyperParam::InitialTileWood).collect();
 
                     let hp_ranges = HyperParamRanges {
@@ -461,15 +471,14 @@ fn read_config() -> (Option<HyperParamRanges>, Settings) {
                         initial_tile_wood_values,
                     };
 
-                    return  (Some(hp_ranges), settings)
+                    return  (hp_ranges, settings)
                 }
-            }
+            } else {panic!("[[Hyperparameters]] section was not found in config.toml") }
         }
-    } 
-    (None, settings)
+    } panic!("config.toml was not found") 
 }
-    
-fn read_hyperparameter_vec(hyperparameter: &Value, key: &str) -> Option<Vec<usize>> {
+
+fn read_vec_entry(hyperparameter: &Value, key: &str) -> Option<Vec<usize>> {
     if let Some(Value::Array(values)) = hyperparameter.get(key) {
         let extracted_values: Vec<usize> = values.iter().filter_map(|v| {
             if let Value::Integer(value) = v { Some(*value as usize) } else { None }
@@ -481,16 +490,6 @@ fn read_hyperparameter_vec(hyperparameter: &Value, key: &str) -> Option<Vec<usiz
     }
 }
 
-fn read_usize_setting_entry(entry: &Value, key: &str) -> Option<usize> {
-    if let Some(Value::Integer(value)) = entry.get(key) {
-        println!("{}: {:?}", key, value);
-        Some(*value as usize)
-    } else {
-        None
-    }
-}
-
-
 fn main() {
     let timer = Instant::now();
     fs::create_dir_all("output").unwrap();
@@ -498,45 +497,50 @@ fn main() {
     // rayon::ThreadPoolBuilder::new().num_threads(1).build_global().unwrap();
         for_each_hyperparam_combination!(|(hyperparams, settings): (HyperParamCombination, Settings)| {
             let (game_seed, game_tick_count, probability_resolution, initial_tile_gold, initial_tile_wood) = hyperparams;
-
             let initial_tile_resources = BTreeMap::from([(Resource::Gold, initial_tile_gold), (Resource::Wood, initial_tile_wood)]);
-            let mut log = String::new();
-            log.push_str(&format!("Number of possible probability values for one behaviour: {},\nTotal game ticks: {},\nGame seed: {:?},\nInitial tile Resources: {:?}\n\n",
-            probability_resolution, game_tick_count, game_seed, &initial_tile_resources));
-            
             let behaviour_probs = generate_probability_distributions(probability_resolution);
-            log_behaviour_probs(&behaviour_probs, &mut log);
             
+            let mut log = String::new();
+            if settings.print_game_logs {
+                log.push_str(&format!("Number of possible probability values for one behaviour: {},\nTotal game ticks: {},\nGame seed: {:?},\nInitial tile Resources: {:?}\n\n",
+                probability_resolution, game_tick_count, game_seed, &initial_tile_resources));
+                log_behaviour_probs(&behaviour_probs, &mut log);
+            }
+            
+            // Actors should be in the same order as behaviour_probs due to the way actors were created.
             let mut tile = Tile::new(vec![], initial_tile_resources.clone());
             for actors_behaviour_probs in behaviour_probs.iter() {
                 let actor = Actor::new(BTreeMap::new(), actors_behaviour_probs.clone());
-                // Actors should be in the same order as behaviour_probs due to the way actors were created.
                 tile.actors.push(actor);
             }
-
             
             let hash = hash_hyper_params(&hyperparams);
             let plot_file_name = format!("output/{}.gif", hash);
             let mut root = BitMapBackend::gif(plot_file_name, (640, 480), 100).unwrap().into_drawing_area();
             let mut rng = StdRng::seed_from_u64(game_seed as u64);
-            for t in 0..game_tick_count {
-                log.push_str(&format! ("\n---------- Game tick {} ----------\n", t));
-                tile.execute_behaviour(&mut rng, &mut log);
 
-                if (t % settings.plotting_frame_subselectecion_factor) == 0 {
-                    plot_utility_distribution(&tile.actors, &behaviour_probs, &mut root, (t as u64).try_into().unwrap());
+            for tick in 0..game_tick_count {
+                tile.execute_behaviour(&mut rng, &mut log); 
+
+                if settings.print_game_logs {
+                    log.push_str(&format! ("\n---------- Game tick {} ----------\n", tick));
+                }
+                if (tick % settings.plotting_frame_subselection_factor) == 0 {
+                    plot_utility_distribution(&tile.actors, &behaviour_probs, &mut root, (tick as u64).try_into().unwrap());
                 }
             }
 
         let (winner_index, winner) = tile.actors.iter().enumerate()
         .max_by(|(_, a), (_, b)| a.get_utility().partial_cmp(&b.get_utility()).unwrap_or(std::cmp::Ordering::Equal))
         .unwrap(); 
-
-        log.push_str(&format!("\nActor with this ID won: {:?}\nActor's resources are: {:?}\nActor's utility is: {:?}",
-        winner_index, winner.resources, winner.get_utility()));
-
-        let file_name = format!("output/{}.txt", hash);
-        write(&file_name, log).unwrap();
+        
+        if settings.print_game_logs {
+            log.push_str(&format!("\nActor with this ID won: {:?}\nActor's resources are: {:?}\nActor's utility is: {:?}",
+            winner_index, winner.resources, winner.get_utility()));
+    
+            let file_name = format!("output/{}.txt", hash);
+            write(&file_name, log).unwrap();
+        }
         });
 
     println!("Execution time: {:?}", timer.elapsed());
