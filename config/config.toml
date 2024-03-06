@@ -2,9 +2,9 @@
 
 game_tick_count_values = [500]
 game_seed_values = [2]
-probability_resolution_values = [7]
-initial_tile_gold_values = [0, 2500]
-initial_tile_wood_values = [0, 2500]
+probability_resolution_values = [4]
+initial_tile_gold_values = [2500]
+initial_tile_wood_values = [2500]
 
 
 [[Settings]]

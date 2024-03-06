@@ -22,7 +22,7 @@ use rayon::prelude::*;
 // This is one of three complementary types.
 #[derive(Debug, Clone, Hash)]
 enum HyperParam { 
-    // This variant can be made to contain usize num, (that can be cast to u64 before use because u64 is required),
+    // This variant can be made to contain usize num (that can be cast to u64 before use because u64 is required),
     // but we want to retain type variability for hyperparameters anyway.
     GameSeed(u64), 
     GameTickCount(usize),
@@ -48,35 +48,14 @@ struct HyperParamRanges {
 #[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Hash, Clone, EnumIter)]
 enum Resource {
     Gold,
-    Wood,
-    Reputation,
 }
 
-type BehaviourFn = fn(usize, &mut Tile, &mut StdRng) -> Result<String, ()>; 
-const BEHAVIOURS: [BehaviourFn; 3] = [harvest_wood, mine_gold, get_reputation_or_gold];
-const BEHAVIOUR_NAMES: [&str; 3] = ["harvest_wood", "mine_gold", "get_reputation_or_gold"];
+type AgentIndex = usize;
+type BehaviourFn = fn(AgentIndex, &mut Tile, &mut StdRng) -> Result<String, ()>; 
+const BEHAVIOURS: [BehaviourFn; 3] = [spend_gold_to_increase_reputation, mine_gold, try_to_collect_tax];
+const BEHAVIOUR_NAMES: [&str; 3] = ["spend_gold_to_increase_reputation", "mine_gold", "try_to_collect_tax"];
 
-fn harvest_wood(current_actor_index: usize, tile: &mut Tile, _rng: &mut StdRng) -> Result<String, ()> {
-    let resource_change: usize = 1;
-    let old_tile_resource_amount = *tile.resources.get(&Resource::Wood).unwrap_or(&0);
-    let old_actor_resource_amount = *tile.actors[current_actor_index].resources.get(&Resource::Wood).unwrap_or(&0);
-
-    if possble_to_subtract(old_tile_resource_amount, resource_change) {
-        *tile.resources.entry(Resource::Wood).or_insert(0) -= resource_change;
-        *tile.actors[current_actor_index].resources.entry(Resource::Wood).or_insert(0) += resource_change;
-
-        Ok(String::from(format!("Wood {} -> {} for Tile | Wood {} -> {} for Actor {}.\n",
-        old_tile_resource_amount,
-        tile.resources.get(&Resource::Wood).unwrap_or(&0),
-        old_actor_resource_amount,
-        tile.actors[current_actor_index].resources.get(&Resource::Wood).unwrap_or(&0),
-        current_actor_index)))
-    } else {
-        Ok(String::from("Not enough wood to harvest.\n"))
-    }
-}
-
-fn mine_gold(current_actor_index: usize, tile: &mut Tile, rng: &mut StdRng) -> Result<String, ()> {
+fn mine_gold(current_actor_index: AgentIndex, tile: &mut Tile, rng: &mut StdRng) -> Result<String, ()> {
     if rng.gen_bool(0.5) { 
         let resource_change: usize = 1;
         let old_actor_resource_amount = *tile.actors[current_actor_index].resources.get(&Resource::Gold).unwrap_or(&0);
@@ -100,25 +79,50 @@ fn mine_gold(current_actor_index: usize, tile: &mut Tile, rng: &mut StdRng) -> R
     }
 }
 
-fn get_reputation_or_gold(current_actor_index: usize, tile: &mut Tile, _rng: &mut StdRng) -> Result<String, ()> {
+fn try_to_collect_tax(calling_agent_index: AgentIndex, tile: &mut Tile, rng: &mut StdRng) -> Result<String, ()> {
     let resource_change: usize = 1;
-    let mut other_actors = tile.actors.clone();
-    other_actors.remove(current_actor_index);
+    let mut total_tax_collected: usize = 0;
 
-    let max_reputation_among_other_actors = other_actors.iter()
-        .map(|actor| actor.resources.get(&Resource::Reputation).unwrap_or(&0))
-        .max()
-        .unwrap_or(&0);
+    for (targeted_actor_index, _targeted_actor) in tile.clone().actors.iter().enumerate() {
+        let calling_actor_reputation_about_target = tile.reputations[calling_agent_index][targeted_actor_index];
+        let targeted_actor_reputation_about_caller = tile.reputations[targeted_actor_index][calling_agent_index];
+        let target_actor_gold_amount = *tile.actors[targeted_actor_index].resources.get(&Resource::Gold).unwrap_or(&0);
 
-    let actor_reputation = tile.actors[current_actor_index].resources.get(&Resource::Reputation).unwrap_or(&0);
-
-    if actor_reputation > max_reputation_among_other_actors {
-        *tile.actors[current_actor_index].resources.entry(Resource::Gold).or_insert(0) += resource_change;
-        Ok(String::from("Getting gold for the highest reputation.\n"))
-    } else {
-        *tile.actors[current_actor_index].resources.entry(Resource::Reputation).or_insert(0) += resource_change;
-        Ok(String::from("Not enough reputation to get gold.\n"))
+        if (targeted_actor_reputation_about_caller > calling_actor_reputation_about_target)
+        && possble_to_subtract(target_actor_gold_amount, resource_change) 
+        && rng.gen_bool(0.2) {
+            *tile.actors[calling_agent_index].resources.entry(Resource::Gold).or_insert(0) += resource_change;
+            *tile.actors[targeted_actor_index].resources.entry(Resource::Gold).or_insert(0) -= resource_change;
+            total_tax_collected += 1;
+        }
     }
+
+    Ok(String::from(format!("Agent {} collected {} gold from taxes.\n", calling_agent_index, total_tax_collected)))
+}
+
+fn spend_gold_to_increase_reputation(calling_agent: AgentIndex, tile: &mut Tile, _rng: &mut StdRng) -> Result<String, ()> {
+    let old_actor_gold_amount = *tile.actors[calling_agent].resources.get(&Resource::Gold).unwrap_or(&0);
+    let gold_required = tile.actors.len() - 1;
+
+    if possble_to_subtract(old_actor_gold_amount, gold_required) {
+        *tile.actors[calling_agent].resources.entry(Resource::Gold).or_insert(0) -= gold_required;
+        let indices_of_other_actors = {
+            let mut agent_indices = (0..tile.actors.len()).collect_vec();
+            agent_indices.remove(calling_agent);
+            agent_indices
+        };
+        
+        for index in indices_of_other_actors {
+            *tile.actors[index].resources.entry(Resource::Gold).or_insert(0) += 1;
+        }
+
+        tile.reputations.update_reputations_of_others_about_agent(0, |x| *x += 1.0);
+        Ok(String::from("Gold spent to buy reputation.\n"))
+
+    } else {
+        Ok(String::from("Not enough gold to pay.\n"))
+    }
+
 }
 
 type Resources = BTreeMap<Resource, usize>;
@@ -135,10 +139,22 @@ struct Actor {
     resources: Resources,
 } 
 
+type ReputationMatrix = Vec<Vec<f64>>;
+
+fn pretty_print_reputations(m: ReputationMatrix, log: &mut String) {
+    for (row_index, row) in m.iter().enumerate() {
+        let row_str = row.iter()
+                            .map(|&val| format!("{:5.2}", val))
+                            .collect::<Vec<String>>()
+                            .join(" ");
+        log.push_str(&format!("Row {:2}: {}\n", row_index, row_str));
+    }
+}
 #[derive(Debug, Default, Clone)]
 struct Tile {
     actors: Vec<Actor>, 
     resources: Resources,
+    reputations: ReputationMatrix,
 }
 
 impl Actor {
@@ -171,8 +187,8 @@ impl Actor {
 }
 
 impl Tile {
-    fn new(actors: Vec<Actor>, resources: Resources) -> Tile {
-        Tile{actors, resources}
+    fn new(actors: Vec<Actor>, resources: Resources, reputations: Vec<Vec<f64>>) -> Tile {
+        Tile{actors, resources, reputations}
     }
 
     fn execute_behaviour(&mut self, rng: &mut StdRng, log: &mut String) {
@@ -196,13 +212,43 @@ impl Tile {
     }
 }
 
-fn possble_to_subtract(value: usize, amount_to_substract: usize) -> bool {
-    if amount_to_substract > value {
-        false
-    } else {
-        true
+trait ReputationsTrait {
+    fn update_reputations_of_agent_about_others<F>(&mut self, agent_index: usize, update_fn: F)
+    where F: Fn(&mut f64);
+
+    fn update_reputations_of_others_about_agent<F>(&mut self, agent_index: usize, update_fn: F)
+    where F: Fn(&mut f64);
+}
+
+impl ReputationsTrait for ReputationMatrix {
+    fn update_reputations_of_agent_about_others<F>(&mut self, agent_index: usize, update_fn: F)
+    where F: Fn(&mut f64) {
+        if let Some(row) = self.get_mut(agent_index) {
+            for reputation in row {
+                update_fn(reputation);
+            }
+        }
+    }
+
+    fn update_reputations_of_others_about_agent<F>(&mut self, agent_index: usize, update_fn: F)
+    where F: Fn(&mut f64) {
+        for row in self.iter_mut() {
+            if let Some(rep) = row.get_mut(agent_index) {
+                update_fn(rep);
+            }
+        }
     }
 }
+
+
+fn possble_to_subtract(value: usize, amount_to_substract: usize) -> bool {
+    if amount_to_substract <= value {
+        true
+    } else {
+        false
+    }
+}
+
 
 fn generate_probability_distributions(number_of_probability_values: usize) -> Vec<Vec<f64>> {
     match number_of_probability_values {
@@ -370,9 +416,9 @@ fn plot_utility_distribution(
     let tick_info = format!("Tick: {}", tick_number);
 
     let legend_entries = vec![
-        ("harvest_wood", RED),
-        ("mine_gold", GREEN),
-        ("get_reputation_or_gold", BLUE),
+        (BEHAVIOUR_NAMES[0], RED),
+        (BEHAVIOUR_NAMES[1], GREEN),
+        (BEHAVIOUR_NAMES[2], BLUE),
         (&tick_info, WHITE)
     ];
 
@@ -496,8 +542,8 @@ fn main() {
 
     // rayon::ThreadPoolBuilder::new().num_threads(1).build_global().unwrap();
     for_each_hyperparam_combination!(|(hyperparams, settings): (HyperParamCombination, Settings)| {
-        let (game_seed, game_tick_count, probability_resolution, initial_tile_gold, initial_tile_wood) = hyperparams;
-        let initial_tile_resources = BTreeMap::from([(Resource::Gold, initial_tile_gold), (Resource::Wood, initial_tile_wood)]);
+        let (game_seed, game_tick_count, probability_resolution, initial_tile_gold, _initial_tile_wood) = hyperparams;
+        let initial_tile_resources = BTreeMap::from([(Resource::Gold, initial_tile_gold)]);
         let behaviour_probs = generate_probability_distributions(probability_resolution);
         
         let mut log = String::new();
@@ -507,14 +553,18 @@ fn main() {
             log_behaviour_probs(&behaviour_probs, &mut log);
         }
         
+        let num_of_agents = behaviour_probs.len();
+        let reputation_matrix = vec![vec![1f64; num_of_agents]; num_of_agents];
+
         // Actors should be in the same order as behaviour_probs due to the way actors were created.
-        let mut tile = Tile::new(vec![], initial_tile_resources.clone());
+        let mut tile = Tile::new(vec![], initial_tile_resources.clone(), reputation_matrix);
         for actors_behaviour_probs in behaviour_probs.iter() {
             let actor = Actor::new(BTreeMap::new(), actors_behaviour_probs.clone());
             tile.actors.push(actor);
         }
         
         let hash = hash_hyper_params(&hyperparams);
+
         let plot_file_name = format!("output/{}.gif", hash);
         let mut root = BitMapBackend::gif(plot_file_name, (640, 480), 100).unwrap().into_drawing_area();
         let mut rng = StdRng::seed_from_u64(game_seed as u64);
@@ -528,14 +578,16 @@ fn main() {
         }
         
         if settings.print_game_logs {
-            let (winner_index, winner) = tile.actors.iter().enumerate()
-            .max_by(|(_, a), (_, b)| a.get_utility().partial_cmp(&b.get_utility()).unwrap_or(std::cmp::Ordering::Equal))
-            .unwrap();
+            // let (winner_index, winner) = tile.actors.iter().enumerate()
+            // .max_by(|(_, a), (_, b)| a.get_utility().partial_cmp(&b.get_utility()).unwrap_or(std::cmp::Ordering::Equal))
+            // .unwrap();
         
-            log.push_str(&format!("\nActor with this ID won: {:?}\nActor's resources are: {:?}\nActor's utility is: {:?}",
-            winner_index, winner.resources, winner.get_utility()));
-    
+            // log.push_str(&format!("\nActor with this ID won: {:?}\nActor's resources are: {:?}\nActor's utility is: {:?}",
+            // winner_index, winner.resources, winner.get_utility()));
+            
+            pretty_print_reputations(tile.reputations, &mut log);
             let file_name = format!("output/{}.txt", hash);
+            
             write(&file_name, log).unwrap();
         }
     });
