@@ -1,11 +1,9 @@
 [[Hyperparameters]]
 
-game_tick_count_values = [100]
 game_seed_values = [2]
-probability_resolution_values = [4]
-initial_tile_gold_values = [2500]
-initial_tile_wood_values = [2500]
-
+game_tick_count_values = [1000]
+probability_resolution_values = [9]
+mining_difficulty_growth_rate_values = [1.0001]
 
 [[Settings]]
 
