@@ -28,12 +28,11 @@ enum HyperParam {
     GameTickCount(usize),
     ProbabilityResolution(usize),
     InitialTileGold(usize),
-    InitialTileWood(usize),
 }
 
 // This tuple exists to make destructuring of hyperparameter combinations more convenient.
 // This is one of three complementary types.
-type HyperParamCombination = (u64, usize, usize, usize, usize); 
+type HyperParamCombination = (u64, usize, usize, usize); 
 
 /// This is one of three complementary types.
 #[derive(Debug, Clone, Hash)]
@@ -42,7 +41,6 @@ struct HyperParamRanges {
     game_tick_count_values: Vec<HyperParam>,
     probability_resolution_values: Vec<HyperParam>,
     initial_tile_gold_values: Vec<HyperParam>,
-    initial_tile_wood_values: Vec<HyperParam>,
 }
         
 #[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Hash, Clone, EnumIter)]
@@ -56,26 +54,23 @@ const BEHAVIOURS: [BehaviourFn; 3] = [spend_gold_to_increase_reputation, mine_go
 const BEHAVIOUR_NAMES: [&str; 3] = ["spend_gold_to_increase_reputation", "mine_gold", "try_to_collect_tax"];
 
 fn mine_gold(current_actor_index: AgentIndex, tile: &mut Tile, rng: &mut StdRng) -> Result<String, ()> {
-    if rng.gen_bool(0.5) { 
-        let resource_change: usize = 1;
-        let old_actor_resource_amount = *tile.actors[current_actor_index].resources.get(&Resource::Gold).unwrap_or(&0);
-        let old_tile_resource_amount = *tile.resources.entry(Resource::Gold).or_insert(0);
+    let resource_change: usize = 1;
+    let old_actor_resource_amount = *tile.actors[current_actor_index].resources.get(&Resource::Gold).unwrap_or(&0);
+    let old_tile_resource_amount = *tile.resources.entry(Resource::Gold).or_insert(0);
 
-        if possble_to_subtract(old_tile_resource_amount, resource_change) {
-            *tile.resources.entry(Resource::Gold).or_insert(0) -= resource_change;
-            *tile.actors[current_actor_index].resources.entry(Resource::Gold).or_insert(0) += resource_change;
+    if possble_to_subtract(old_tile_resource_amount, resource_change)
+    && rng.gen_bool(0.5) {
+        *tile.resources.entry(Resource::Gold).or_insert(0) -= resource_change;
+        *tile.actors[current_actor_index].resources.entry(Resource::Gold).or_insert(0) += resource_change;
 
-            Ok(String::from(format!("Gold {} -> {} for Tile | Gold {} -> {} for Actor {}.\n",
-            old_tile_resource_amount,
-            tile.resources.get(&Resource::Gold).unwrap_or(&0),
-            old_actor_resource_amount,
-            tile.actors[current_actor_index].resources.get(&Resource::Gold).unwrap_or(&0),
-            current_actor_index)))
-        } else {
-            Ok(String::from("Not enough gold to mine.\n"))
-        }
+        Ok(String::from(format!("Gold {} -> {} for Tile | Gold {} -> {} for Actor {}.\n",
+        old_tile_resource_amount,
+        tile.resources.get(&Resource::Gold).unwrap_or(&0),
+        old_actor_resource_amount,
+        tile.actors[current_actor_index].resources.get(&Resource::Gold).unwrap_or(&0),
+        current_actor_index)))
     } else {
-        Ok(String::from("No luck in gold mining.\n"))
+        Ok(String::from("Not enough gold to mine or no luck.\n"))
     }
 }
 
@@ -141,15 +136,49 @@ struct Actor {
 
 type ReputationMatrix = Vec<Vec<f64>>;
 
-fn pretty_print_reputations(m: ReputationMatrix, log: &mut String) {
+fn log_reputations(m: &ReputationMatrix, log: &mut String) {
+    log.push_str("Reputation matrix: \n");
+    let header: String = (0..m[0].len())
+        .map(|col_index| format!("{:5}", col_index))
+        .collect::<Vec<String>>()
+        .join(" ");
+    log.push_str(&format!("IDs{}\n", header));
+
     for (row_index, row) in m.iter().enumerate() {
         let row_str = row.iter()
-                            .map(|&val| format!("{:5.2}", val))
-                            .collect::<Vec<String>>()
-                            .join(" ");
-        log.push_str(&format!("Row {:2}: {}\n", row_index, row_str));
+            .map(|&val| format!("{:5.2}", val))
+            .collect::<Vec<String>>()
+            .join(" ");
+        log.push_str(&format!("{:2}  {}\n", row_index, row_str));
     }
 }
+
+fn log_behaviour_probs(behaviour_probs: &Vec<Vec<f64>>, log: &mut String) {
+    log.push_str("IDs and behaviours with probabilities: \n");
+
+    for (actor_number, actor_behaviours) in behaviour_probs.iter().enumerate() {
+        let row = actor_behaviours.iter().enumerate().map(|(i, behaviour_probability)| {
+            let behaviour_name = BEHAVIOUR_NAMES[i];
+            format!("{} ({:.0}%)", behaviour_name, behaviour_probability * 100.0)
+        }).collect::<Vec<String>>().join(", ");
+
+        log.push_str(&format!("{:2}   [{}]\n", actor_number, row));
+    }
+    log.push_str("\n");
+}
+fn log_general_information (hyperparameters: &HyperParamCombination, log: &mut String) {
+    let (game_seed, game_tick_count, probability_resolution, initial_tile_gold) = hyperparameters;
+    log.push_str(&format!("Number of possible probability values for one behaviour: {},\nGame ticks count: {},\nGame seed: {:?},\nInitial tile gold: {:?}\n\n",
+    probability_resolution, game_tick_count, game_seed, &initial_tile_gold));
+}
+fn log_resources (agents: &Vec<Actor>, log: &mut String) {
+    log.push_str("IDs and final resources:\n");
+    for (id, agent) in agents.iter().enumerate() {
+        log.push_str(&format!("{:2}  {:?}\n", id, &agent.resources));
+    }
+    log.push_str("\n");
+}
+
 #[derive(Debug, Default, Clone)]
 struct Tile {
     actors: Vec<Actor>, 
@@ -159,8 +188,7 @@ struct Tile {
 
 impl Actor {
     fn new(initial_resources: Resources, behaviour_probs: Vec<f64>) -> Actor {
-        let mut zeroed_resources = Resource::iter().map(|r| (r, 0)).collect::<Resources>();
-        
+        let mut zeroed_resources = Resource::iter().map(|r| (r, 0)).collect::<Resources>();        
         for (resource, amount) in initial_resources {
             zeroed_resources.insert(resource, amount);
         }
@@ -170,18 +198,6 @@ impl Actor {
             .collect();
 
         Actor {resources: zeroed_resources, behaviours: behaviour_probs}
-    }
-
-    fn get_utility(&self) -> f64 {
-        let mut total_utility = 0.0;
-        for (_resource, &amount) in &self.resources {
-            if amount > 0 {
-                total_utility += f64::ln(amount as f64) + 1.0;
-                    // We add constant to the {log of resource amount} because without it resource change from 0 to 1 will not change utility.
-                    // This is so because ln(1.0) == 0.0.
-            }
-        }
-        total_utility
     }
 
 }
@@ -301,20 +317,6 @@ fn probability_distributions_recursion(
     }
 }
 
-fn log_behaviour_probs(behaviour_probs: &Vec<Vec<f64>>, log: &mut String) {
-    log.push_str("Actor ID, Behaviours with probabilities: \n");
-
-    for (actor_number, actor_behaviours) in behaviour_probs.iter().enumerate() {
-        let row = actor_behaviours.iter().enumerate().map(|(i, behaviour_probability)| {
-            let behaviour_name = BEHAVIOUR_NAMES[i];
-            format!("{} ({:.0}%)", behaviour_name, behaviour_probability * 100.0)
-        }).collect::<Vec<String>>().join(", ");
-
-        log.push_str(&format!("{}, [{}]\n", actor_number, row));
-    }
-    log.push_str("\n");
-}
-
 fn hash_hyper_params(hyper_params: &HyperParamCombination) -> u64 {
     let mut hasher = DefaultHasher::new();
     hyper_params.hash(&mut hasher);
@@ -329,7 +331,6 @@ macro_rules! for_each_hyperparam_combination {
              &hps.game_tick_count_values,
              &hps.probability_resolution_values,
              &hps.initial_tile_gold_values,
-             &hps.initial_tile_wood_values,
              ]
             .into_iter()
             .multi_cartesian_product()
@@ -341,16 +342,14 @@ macro_rules! for_each_hyperparam_combination {
                         HyperParam::GameTickCount(game_tick_count),
                         HyperParam::ProbabilityResolution(probability_resolution),
                         HyperParam::InitialTileGold(initial_tile_gold),
-                        HyperParam::InitialTileWood(initial_tile_wood), 
                        ] = &hyperparams[..] {
                         
-                        $callback(
-                            ((*game_seed,
+                        $callback(((
+                            *game_seed,
                             *game_tick_count,
                             *probability_resolution,
                             *initial_tile_gold,
-                            *initial_tile_wood), settings.clone())
-                        );
+                        ), settings.clone()));
                 } else {
                     panic!("Hyperparameters were not parsed correctly.");
                 }
@@ -358,18 +357,18 @@ macro_rules! for_each_hyperparam_combination {
         }};
     }
     
-fn plot_utility_distribution(
+fn plot_gold_distribution(
     actors: &Vec<Actor>,
     behavior_probs: &Vec<Vec<f64>>,
     root: &mut DrawingArea<BitMapBackend<'_>, Shift>,
     tick_number: usize,
 ) {
         
-    let utilities: Vec<f64> = actors.iter()
-    .map(|actor| actor.get_utility())
+    let log_resources: Vec<f64> = actors.iter()
+    .map(|actor| f64::log10(*actor.resources.get(&Resource::Gold).unwrap() as f64))
     .collect();
 
-    let max_utility: f64 = *utilities.iter()
+    let max_log_resource: f64 = *log_resources.iter()
     .max_by(|a, b| a.partial_cmp(b).unwrap())
     .unwrap();
 
@@ -377,18 +376,18 @@ fn plot_utility_distribution(
     root.fill(&WHITE).unwrap();
     let mut chart = ChartBuilder::on(&root)
         .margin(5)
-        .caption("Utility Distribution", ("sans-serif", 30))
+        .caption("Resource distribution", ("sans-serif", 30))
         .x_label_area_size(40)
         .y_label_area_size(40)
-        .build_cartesian_2d(0.0..max_utility, 0..plot_height)
+        .build_cartesian_2d(0.0..max_log_resource, 0..plot_height)
         .unwrap();
-    chart.configure_mesh().x_desc("Utility").y_desc("N").draw().unwrap();
+    chart.configure_mesh().x_desc("log10(Resource)").y_desc("N").draw().unwrap();
 
     let bucket_count = 100;
-    let bucket_width = max_utility / bucket_count as f64;
+    let bucket_width = max_log_resource / bucket_count as f64;
     let mut buckets = vec![0u32; bucket_count];
-    for (actor_index, utility) in utilities.iter().enumerate() {
-        let bucket_index = ((utility / max_utility) * (bucket_count as f64 - 1.0)).floor() as usize;
+    for (actor_index, log_resource) in log_resources.iter().enumerate() {
+        let bucket_index = ((log_resource / max_log_resource) * (bucket_count as f64 - 1.0)).floor() as usize;
         let color = RGBColor(
             (255.0 * behavior_probs[actor_index][0]) as u8,
             (255.0 * behavior_probs[actor_index][1]) as u8,
@@ -408,7 +407,7 @@ fn plot_utility_distribution(
         buckets[bucket_index]+= 1;
     }
 
-    let (legend_x, legend_y) = (50, 50);
+    let (legend_x, legend_y) = (55, 55);
     let legend_size = 15;
     let text_gap = 5;
     let text_size = 15;
@@ -505,16 +504,11 @@ fn read_config() -> (HyperParamRanges, Settings) {
                     let initial_tile_gold_values = read_vec_entry(hp, "initial_tile_gold_values")
                         .expect("File config.toml should contain initial_tile_gold_values entry in [[Hyperparameters]] with at least one usize value in list.")
                         .into_iter().map(HyperParam::InitialTileGold).collect();
-                    let initial_tile_wood_values = read_vec_entry(hp, "initial_tile_wood_values")
-                        .expect("File config.toml should contain initial_tile_wood_values entry in [[Hyperparameters]] with at least one usize value in list.")
-                        .into_iter().map(HyperParam::InitialTileWood).collect();
-
                     let hp_ranges = HyperParamRanges {
                         game_seed_values,
                         game_tick_count_values,
                         probability_resolution_values,
                         initial_tile_gold_values,
-                        initial_tile_wood_values,
                     };
 
                     return  (hp_ranges, settings)
@@ -542,20 +536,14 @@ fn main() {
 
     // rayon::ThreadPoolBuilder::new().num_threads(1).build_global().unwrap();
     for_each_hyperparam_combination!(|(hyperparams, settings): (HyperParamCombination, Settings)| {
-        let (game_seed, game_tick_count, probability_resolution, initial_tile_gold, _initial_tile_wood) = hyperparams;
+        let (game_seed, game_tick_count, probability_resolution, initial_tile_gold) = hyperparams;
         let initial_tile_resources = BTreeMap::from([(Resource::Gold, initial_tile_gold)]);
         let behaviour_probs = generate_probability_distributions(probability_resolution);
         
         let mut log = String::new();
-        if settings.print_game_logs {
-            log.push_str(&format!("Number of possible probability values for one behaviour: {},\nTotal game ticks: {},\nGame seed: {:?},\nInitial tile Resources: {:?}\n\n",
-            probability_resolution, game_tick_count, game_seed, &initial_tile_resources));
-            log_behaviour_probs(&behaviour_probs, &mut log);
-        }
-        
         let num_of_agents = behaviour_probs.len();
         let reputation_matrix = vec![vec![1f64; num_of_agents]; num_of_agents];
-
+        
         // Actors should be in the same order as behaviour_probs due to the way actors were created.
         let mut tile = Tile::new(vec![], initial_tile_resources.clone(), reputation_matrix);
         for actors_behaviour_probs in behaviour_probs.iter() {
@@ -564,34 +552,30 @@ fn main() {
         }
         
         let hash = hash_hyper_params(&hyperparams);
-
+        
         let plot_file_name = format!("output/{}.gif", hash);
         let mut root = BitMapBackend::gif(plot_file_name, (640, 480), 100).unwrap().into_drawing_area();
         let mut rng = StdRng::seed_from_u64(game_seed as u64);
-
+        
         for tick in 0..game_tick_count {
+            log.push_str(&format! ("---------- Game tick {} ----------\n", tick));
             tile.execute_behaviour(&mut rng, &mut log); 
-            log.push_str(&format! ("\n---------- Game tick {} ----------\n", tick));
             if (tick % settings.plotting_frame_subselection_factor) == 0 {
-                plot_utility_distribution(&tile.actors, &behaviour_probs, &mut root, (tick as u64).try_into().unwrap());
+                plot_gold_distribution(&tile.actors, &behaviour_probs, &mut root, (tick as u64).try_into().unwrap());
             }
+            log.push_str("\n");
         }
         
         if settings.print_game_logs {
-            // let (winner_index, winner) = tile.actors.iter().enumerate()
-            // .max_by(|(_, a), (_, b)| a.get_utility().partial_cmp(&b.get_utility()).unwrap_or(std::cmp::Ordering::Equal))
-            // .unwrap();
-        
-            // log.push_str(&format!("\nActor with this ID won: {:?}\nActor's resources are: {:?}\nActor's utility is: {:?}",
-            // winner_index, winner.resources, winner.get_utility()));
+            log_general_information(&hyperparams, &mut log);
+            log_behaviour_probs(&behaviour_probs, &mut log);
+            log_resources(&tile.actors, &mut log);
+            log_reputations(&tile.reputations, &mut log);
             
-            pretty_print_reputations(tile.reputations, &mut log);
-            let file_name = format!("output/{}.txt", hash);
-            
+            let file_name = format!("output/{}.txt", hash);    
             write(&file_name, log).unwrap();
         }
     });
 
     println!("Execution time: {:?}", timer.elapsed());
 }
-    
