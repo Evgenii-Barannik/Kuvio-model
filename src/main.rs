@@ -50,8 +50,8 @@ enum Resource {
 }
 
 type BehaviourFn = fn(usize, &mut Tile, &mut StdRng, &HyperParamCombination) -> Result<String, ()>; 
-const BEHAVIOURS: [BehaviourFn; 3] = [spend_gold_to_get_rep, mine_gold, collect_tax];
-const BEHAVIOUR_NAMES: [&str; 3] = ["spend_gold_to_get_rep", "mine_gold", "collect_tax"];
+const BEHAVIOURS: [BehaviourFn; 3] = [spend_gold_to_get_rep, mint_gold, collect_tax];
+const BEHAVIOUR_NAMES: [&str; 3] = ["spend_gold_to_get_rep", "mint_gold", "collect_tax"];
 
 fn chance_to_mine_gold(tile: &Tile, difficulty_growth_rate: f64) -> f64 {
    let total_gold =tile.agents
@@ -63,18 +63,17 @@ fn chance_to_mine_gold(tile: &Tile, difficulty_growth_rate: f64) -> f64 {
     1.0/(initial_difficulty * f64::powi(difficulty_growth_rate, total_gold as i32))
 }
 
-fn mine_gold(calling_agent_id: usize, tile: &mut Tile, rng: &mut StdRng, hyperparams: &HyperParamCombination) -> Result<String, ()> {
-    let resource_change: usize = 1;
-    let old_agent_resources = tile.agents[calling_agent_id].resources.clone();
+fn mint_gold(calling_agent_id: usize, tile: &mut Tile, rng: &mut StdRng, hyperparams: &HyperParamCombination) -> Result<String, ()> {
+    let initial_agent_resources = tile.agents[calling_agent_id].resources.clone();
     let difficulty_growth_rate = hyperparams.3.as_f64();
     let probability_of_success = chance_to_mine_gold(&tile, difficulty_growth_rate);
 
     if rng.gen_bool(probability_of_success) {
-        *tile.agents[calling_agent_id].resources.entry(Resource::Gold).or_insert(0) += resource_change;
+        *tile.agents[calling_agent_id].resources.entry(Resource::Gold).or_insert(0) += 1;
 
         Ok(format!("Agent {} mined gold {:?} -> {:?}. Probability of success was {:.3}.\n", 
         calling_agent_id,
-        old_agent_resources,
+        initial_agent_resources,
         tile.agents[calling_agent_id].resources,
         probability_of_success))
     } else {
@@ -85,7 +84,6 @@ fn mine_gold(calling_agent_id: usize, tile: &mut Tile, rng: &mut StdRng, hyperpa
 }
 
 fn collect_tax(calling_agent_id: usize, tile: &mut Tile, rng: &mut StdRng, _hyperparams: &HyperParamCombination) -> Result<String, ()> {
-    let resource_change: usize = 1;
     let mut total_tax_collected: usize = 0;
 
     let ids_of_other_agents = {
@@ -98,13 +96,14 @@ fn collect_tax(calling_agent_id: usize, tile: &mut Tile, rng: &mut StdRng, _hype
         let calling_agent_reputation_about_target = tile.reputations[calling_agent_id][targeted_agent_id];
         let targeted_agent_reputation_about_caller = tile.reputations[targeted_agent_id][calling_agent_id];
         let target_agent_gold_amount = *tile.agents[targeted_agent_id].resources.get(&Resource::Gold).unwrap_or(&0);
+        let tax = target_agent_gold_amount.checked_div_euclid(20).unwrap();
 
         if (targeted_agent_reputation_about_caller > calling_agent_reputation_about_target)
-        && possble_to_subtract(target_agent_gold_amount, resource_change) 
+        && possble_to_subtract(target_agent_gold_amount, tax) 
         && rng.gen_bool(0.2) {
-            *tile.agents[calling_agent_id].resources.entry(Resource::Gold).or_insert(0) += resource_change;
-            *tile.agents[targeted_agent_id].resources.entry(Resource::Gold).or_insert(0) -= resource_change;
-            total_tax_collected += 1;
+            *tile.agents[calling_agent_id].resources.entry(Resource::Gold).or_insert(0) += tax;
+            *tile.agents[targeted_agent_id].resources.entry(Resource::Gold).or_insert(0) -= tax;
+            total_tax_collected += tax;
         }
     }
 
@@ -112,10 +111,10 @@ fn collect_tax(calling_agent_id: usize, tile: &mut Tile, rng: &mut StdRng, _hype
 }
 
 fn spend_gold_to_get_rep(calling_agent_id: usize, tile: &mut Tile, _rng: &mut StdRng, _hyperparams: &HyperParamCombination) -> Result<String, ()> {
-    let old_agent_gold_amount = *tile.agents[calling_agent_id].resources.get(&Resource::Gold).unwrap_or(&0);
+    let initial_agent_gold_amount = *tile.agents[calling_agent_id].resources.get(&Resource::Gold).unwrap_or(&0);
     let gold_required = tile.agents.len() - 1;
 
-    if possble_to_subtract(old_agent_gold_amount, gold_required) {
+    if possble_to_subtract(initial_agent_gold_amount, gold_required) {
         *tile.agents[calling_agent_id].resources.entry(Resource::Gold).or_insert(0) -= gold_required;
         let ids_of_other_agents = {
             let mut agent_ids = (0..tile.agents.len()).collect_vec();
@@ -131,7 +130,7 @@ fn spend_gold_to_get_rep(calling_agent_id: usize, tile: &mut Tile, _rng: &mut St
         Ok(format!("Agent {} spent {} gold to buy reputation.\n", calling_agent_id, gold_required))
         
     } else {
-        Ok(format!("Agent {} has not enough gold to buy reputation ({} vs required {})\n", calling_agent_id, old_agent_gold_amount, gold_required))
+        Ok(format!("Agent {} has not enough gold to buy reputation ({} vs required {})\n", calling_agent_id, initial_agent_gold_amount, gold_required))
     }
 }
 
@@ -152,16 +151,16 @@ struct Agent {
 type ReputationMatrix = Vec<Vec<f64>>;
 
 fn log_reputations(m: &ReputationMatrix, log: &mut String) {
-    log.push_str("Reputation matrix: \n");
+    log.push_str("Final reputation matrix: \n");
     let header: String = (0..m[0].len())
         .map(|col_index| format!("{:5}", col_index))
         .collect::<Vec<String>>()
         .join(" ");
-    log.push_str(&format!("IDs{}\n", header));
+    log.push_str(&format!("IDs {}\n", header));
 
     for (row_index, row) in m.iter().enumerate() {
         let row_str = row.iter()
-            .map(|&val| format!("{:5.2}", val))
+            .map(|&val| format!("{:5.0}", val))
             .collect::<Vec<String>>()
             .join(" ");
         log.push_str(&format!("{:2}  {}\n", row_index, row_str));
@@ -242,24 +241,12 @@ impl Tile {
     }
 }
 
-trait ReputationsTrait {
-    fn update_reputations_of_agent_about_others<F>(&mut self, agent_id: usize, update_fn: F)
-    where F: Fn(&mut f64);
-
+trait UpdateReputations {
     fn update_reputations_of_others_about_agent<F>(&mut self, agent_id: usize, update_fn: F)
     where F: Fn(&mut f64);
 }
 
-impl ReputationsTrait for ReputationMatrix {
-    fn update_reputations_of_agent_about_others<F>(&mut self, agent_id: usize, update_fn: F)
-    where F: Fn(&mut f64) {
-        if let Some(row) = self.get_mut(agent_id) {
-            for reputation in row {
-                update_fn(reputation);
-            }
-        }
-    }
-
+impl UpdateReputations for ReputationMatrix {
     fn update_reputations_of_others_about_agent<F>(&mut self, agent_id: usize, update_fn: F)
     where F: Fn(&mut f64) {
         for row in self.iter_mut() {
@@ -329,9 +316,9 @@ fn probability_distributions_recursion(
     }
 }
 
-fn hash_hyper_params(hyper_params: &HyperParamCombination) -> u64 {
+fn hash_hyperparams(hyperparams: &HyperParamCombination) -> u64 {
     let mut hasher = DefaultHasher::new();
-    hyper_params.hash(&mut hasher);
+    hyperparams.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -384,14 +371,14 @@ fn plot_gold_distribution(
     .max_by(|a, b| a.partial_cmp(b).unwrap())
     .unwrap();
 
-    let plot_height = 5u32;
+    let plot_height = 50u32;
     root.fill(&WHITE).unwrap();
     let mut chart = ChartBuilder::on(&root)
         .margin(5)
         .caption("Gold distribution", ("sans-serif", 30))
         .x_label_area_size(40)
         .y_label_area_size(40)
-        .build_cartesian_2d(0.0..max_log_resource, 0..plot_height)
+        .build_cartesian_2d(0.0..3.0, 0..plot_height)
         .unwrap();
     chart.configure_mesh().x_desc("log10(Gold)").y_desc("N").draw().unwrap();
 
@@ -581,7 +568,7 @@ fn main() {
             tile.agents.push(agent);
         }
         
-        let hash = hash_hyper_params(&hyperparams);
+        let hash = hash_hyperparams(&hyperparams);
         
         let plot_file_pathname = format!("output/{}.gif", hash);
         let mut root = BitMapBackend::gif(plot_file_pathname, (640, 480), 100).unwrap().into_drawing_area();
