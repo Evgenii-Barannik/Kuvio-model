@@ -10,6 +10,8 @@ Let's define a resource as a label that corresponds to an unsigned integer value
 
 We define the growth of a resource as desired and its loss as undesired.
 
+To evaluate desiredness, we use utility function; that is, logarithm of resource. This is mainly manifested through utility change (derivative value as 1/x), which would probably be useless in simplest model.
+
 ## Behaviour
 
 Behaviour is a specific action that can transform the state of a **tile**, but in the most cases it is focused on the state of the acting **agent**. In our simplest model, each behaviour is associated with a corresponding probability of being chosen at each **tick** of a **game**. Behaviours can be simple but may also contain arbitrarily complex logic, including pointers to other behaviours (tho control must flow along directed acyclic graph in the end). Inputs to decision-making may include internal agent behaviour variables and resources, as well as external parameters like reputations. Behaviour should be hidden from all parts of the system except for the agent handling mechanism, but information about it is revealed through the **game** unfolding. In a slightly more complex system, we might consider using several behaviour+probability lists for acting on different tiles.
