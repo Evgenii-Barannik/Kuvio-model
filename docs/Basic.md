@@ -30,7 +30,7 @@ A game event is defined by the number and parameters of **agents**, their course
 
 ## Time
 
-In a modeling run, agents perform behaviours with a certain frequency (which is relevant whether we consider a single tile or reservoir). The order in which agents execute their behaviours on each game tick is defined to be the same as the order in which agents were created. Running time or the number of events should be adjusted experimentally until the model sufficiently converges (changes in parameters produce more significant results than changes in starting game seeds).
+In a modeling run, agents perform behaviours with a certain frequency (which is relevant whether we consider a single tile or reservoir). Running time or the number of events should be adjusted experimentally until the model sufficiently converges (changes in parameters produce more significant results than changes in starting game seeds).
 
 # Modeling flow
 
