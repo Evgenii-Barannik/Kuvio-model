@@ -14,11 +14,11 @@ To evaluate desiredness, we use utility function; that is, logarithm of resource
 
 ## Behaviour
 
-Behaviour is a specific action that can transform the state of a **tile**, but in the most cases it is focused on the state of the acting **agent**. In our simplest model, each behaviour is associated with a corresponding probability of being chosen at each **tick** of a **game**. Behaviours can be simple but may also contain arbitrarily complex logic, including pointers to other behaviours (tho control must flow along directed acyclic graph in the end). Inputs to decision-making may include internal agent behaviour variables and resources, as well as external parameters like reputations. Behaviour should be hidden from all parts of the system except for the agent handling mechanism, but information about it is revealed through the **game** unfolding. In a slightly more complex system, we might consider using several behaviour+probability lists for acting on different tiles.
+Behaviour is a decision making algorithm of an **agent**, essentially probability distribution of agent making certain decisions in generating and playing **games**. Behaviours can be simple but may also contain arbitrarily complex logic, probably even including pointers to other behaviours (tho control must flow along directed acyclic graph in the end). Inputs to decision-making may include internal agent behaviour variables and resources, as well as external parameters like reputations. Behaviour should be hidden from all parts of the system except for the agent handling mechanism, but information about it is revealed through the **games** unfolding.
 
 ## Tile
 
-We define a tile as a community of **agents** with a list of **reputation** values between agents (allowing us to refer to reputations as "relational resources"). A tile is finite and thus can only be inhabited by a limited number of agents.
+We define a tile as a community of **agents**, possibly with some rules, a list of **reputation** values between agents, and treasuries to store communal resources. A tile is finite and thus could be subsampled by selection of actors.
 
 ## Reservoir
 
@@ -27,6 +27,18 @@ A reservoir is a large set of **agents** external to a given **tile**. The reser
 ## Game
 
 A game event is defined by the number and parameters of **agents**, their courses of actions, and outcomes. A game event changes **resource** distribution, **reputation**, and exposes information about the chosen course of action, thus revealing information about agents' behaviours.
+
+### Basic two-actor game
+
+Two **actors** approach the game. Both have symmetric options to collaborate or cheat, thus 4 outcomes are possible. Resource change in a **game** is model parameter that should be adjusted to experimental conditions.
+
+### Basic one-actor game
+
+One **actor** participates and has options to collaborate or cheat, **resource** change is a model parameter
+
+### Declinable two-actor game
+
+Two actors participate. Bothe have symmetric options to collaborate, cheat, or decline. If either declines, no resource change happens. Thus 5 outcomes are possible. Otherwise it is similar to basic 2-actor game.
 
 ## Time
 
@@ -41,5 +53,7 @@ A number of simulations should be performed using deterministic pseudorandom rul
 1. Determine the timescales required for model stabilization.
 2. Determine where tile-membership decision-making allows for final results to significantly diverge.
 3. Observe whether tile behaviour difference from the reservoir or tile-membership considering decision-making has more influence.
+4. Determine required difference in behaviour to make tile more successful than reservoir with basic 2-game, 1-game, and declinable 2-game
+5. Determine where 2-game and diclinable 2-game diverge
 
 Later, we would introduce more complex decision-making, tile memory in addition to the reputation system, tile memberships, tile memory modification rules, and much more. But this is the basic stuff that we should start with.
