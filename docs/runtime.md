@@ -2,7 +2,7 @@
 
 ## About
 
-This document describes specifications of a main thread of a single simulation with given set of parametes.
+This document describes specifications of a main thread of a single simulation with given set of parameters.
 
 Every simulation is done in a single-threaded mode to preserve deterministic entropy for analysis. Observational behavior included in modeling is not discussed here as the model is totally oblivious to the fact that it is being analyzed in any way (all observational operations MUST be clean for the model).
 
