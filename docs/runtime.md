@@ -44,7 +44,7 @@ Games proposed by providers are collected and shuffled in single pool.
 
 ### Players exchange
 
-Depending on every game rules, it is connected to a player exchange. Exchange could have complex rules on how to exclude players. Different roles may be connected to differetn pools. It is important that pools are generated before games execution, based on pre-existing information.
+Depending on every game rules, it is connected to a player exchange. Exchange could have complex rules on how to exclude players. Different roles may be connected to different pools. It is important that pools are generated before games execution, based on pre-existing information.
 
 Pools might have drainable and non-drainable behaviour and may be shared or not between games. They should probably have deterministic hash-id which would identify these for game engine.
 
