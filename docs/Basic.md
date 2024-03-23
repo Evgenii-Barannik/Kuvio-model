@@ -1,32 +1,32 @@
 # Basic entities
 
-## Actor
+## Agent
 
-Actor is defined by **resource** and **behaviour**
+An agent is defined by two separate components: a list of **resources** and a list of possible **behaviours**, each with a corresponding probability of occurring.
 
 ## Resource
 
-Let's define resource as linear unsigned integer value that represents "wealth" of entity. In general, there could be many resources and **actor** and **tile** resources could vary, but this is basic model.
+Let's define a resource as a label that corresponds to an unsigned integer value (allowing us to refer to resources as "scalar resources"). Any resource represents the "wealth" of an **agent** in some respect. To help with a suitable intuition, we will use the name "gold" for the first defined resource. Generally, there could be many resources.
 
-We define growth of resource as desired behavior and loss as undesired.
+We define the growth of a resource as desired and its loss as undesired.
 
 To evaluate desiredness, we use utility function; that is, logarithm of resource. This is mainly manifested through utility change (derivative value as 1/x), which would probably be useless in simplest model.
 
 ## Behaviour
 
-Behaviour is probability of **actor** making a certain decision in certains situation. In simplest model, this is probability of **actor** being honest in a **game**. Inputs to decision making include internal actor's behaviour variables, but also external parameters. Behaviour is hidden from all parts of system except for actor handling mechanism, but information about it is revealed through **game** events. In basic variant, we should use simple probabilities of action. In slightly more convoluted system, we would use 2 probability sets for within and outside of tile participations for tile members.
+Behaviour is a decision making algorithm of an **agent**, essentially probability distribution of agent making certain decisions in generating and playing **games**. Behaviours can be simple but may also contain arbitrarily complex logic, probably even including pointers to other behaviours (tho control must flow along directed acyclic graph in the end). Inputs to decision-making may include internal agent behaviour variables and resources, as well as external parameters like reputations. Behaviour should be hidden from all parts of the system except for the agent handling mechanism, but information about it is revealed through the **games** unfolding.
 
 ## Tile
 
-We define a tile as community of **actors**. Tile might have internal resource pool (let's omit it in simplest model). Tile is finite and thus we can generate a selection of actors.
+We define a tile as a community of **agents**, possibly with some rules, a list of **reputation** values between agents, and treasuries to store communal resources. A tile is finite and thus could be subsampled by selection of actors.
 
 ## Reservoir
 
-Reservoir is a large set of **actors** external to given **tile**. Reservoir could be effectively infinite and be described through (generally corellated) probability distributions of parameters.
+A reservoir is a large set of **agents** external to a given **tile**. The reservoir could be effectively infinite and be described through (generally correlated) probability distributions of possible agent-related parameters.
 
 ## Game
 
-A game event is devined by numbet of **actors**, their courses of action, and outcomes. A game event changes **resource** distribution and exposes information about chosen course of action thus revealing some evidence about behaviour parameters of actor.
+A game event is defined by the number and parameters of **agents**, their courses of actions, and outcomes. A game event changes **resource** distribution, **reputation**, and exposes information about the chosen course of action, thus revealing information about agents' behaviours.
 
 ### Basic two-actor game
 
@@ -42,19 +42,18 @@ Two actors participate. Bothe have symmetric options to collaborate, cheat, or d
 
 ## Time
 
-In modeling run, actors chosen randomly perform games with certain frequency (which does not matter if we consider a single tile or reservoir). Running time or number of events should be adjusted experimentally until model sufficiently converges (changes in parameters are more significant than runs with different random seeds).
+In a modeling run, agents perform behaviours with a certain frequency (which is relevant whether we consider a single tile or reservoir). Running time or the number of events should be adjusted experimentally until the model sufficiently converges (changes in parameters produce more significant results than changes in starting game seeds).
 
 # Modeling flow
 
-A number of simulations should be performed using deterministic pseudorandom with recorded seed for reproducibility analysis. Slight pertrubation in parameters should be introduced to ensure model stability. Final utility of tile members versus non-tile member baseline and utility change should be measured. Note, that in most modeled systems some level of stationary state is observed, thus we should aim at system parameters where reservoir utility does not change and discard or seriously doubt at least other parameter space sections.
+A number of simulations should be performed using deterministic pseudorandom rules with a recorded seed for reproducibility. A slight perturbation in parameters should be introduced to ensure model stability. The final resources and reputations of tile members versus the non-tile member baseline change should be measured. Note that in most modeled systems, some level of stationary state is observed; thus, we should aim for system parameters where the reservoir does not change and discard or seriously doubt at least other parameter space sections.
 
 # First experiments
 
-1. Determine timescales required for model stabilization
-2. Determine required difference in behaviour to make tile more successful than reservoir with basic 2-game, 1-game, and declinable 2-game
-3. Determine where 2-game and diclinable 2-game diverge
-4. Determine where tile-membership considering decision making diverges from uniform modeling
-5. Observe whether tile behavior difference from reservoir or tile-membership considering behaviour has more influence
+1. Determine the timescales required for model stabilization.
+2. Determine where tile-membership decision-making allows for final results to significantly diverge.
+3. Observe whether tile behaviour difference from the reservoir or tile-membership considering decision-making has more influence.
+4. Determine required difference in behaviour to make tile more successful than reservoir with basic 2-game, 1-game, and declinable 2-game
+5. Determine where 2-game and diclinable 2-game diverge
 
-Later we would introduce more complex decision making, tile memory, tile memberships, tile memory modification rules, and much more, but this is basic stuff that we should start from.
-
+Later, we would introduce more complex decision-making, tile memory in addition to the reputation system, tile memberships, tile memory modification rules, and much more. But this is the basic stuff that we should start with.
