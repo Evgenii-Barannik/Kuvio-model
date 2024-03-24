@@ -26,7 +26,7 @@ use std::cmp::min;
 enum HyperParam { 
     Seed(u64), 
     ProbabilityResolution(usize),
-    MintingDifficultyGrowthRate(OrderedFloat<f64>),
+    ParameterForBehaviour(OrderedFloat<f64>),
 }
 
 /// This is one of three complementary types.
@@ -34,7 +34,7 @@ enum HyperParam {
 struct HyperParamRanges { 
     seed_values: Vec<HyperParam>,
     probability_resolution_values: Vec<HyperParam>,
-    minting_difficulty_growth_rate_values: Vec<HyperParam>,
+    parameter_for_behaviour_values: Vec<HyperParam>,
 }
 
 // This type exists to make destructuring of hyperparameter combinations more convenient.
@@ -43,7 +43,7 @@ struct HyperParamRanges {
 struct CurrentHyperParams {
     seed: u64,
     probability_resolution: usize,
-    minting_difficulty_growth_rate: OrderedFloat<f64>,
+    parameter_for_behaviour: OrderedFloat<f64>,
 }
 
         
@@ -52,87 +52,96 @@ enum Resource {
     Gold,
 }
 
-type BehaviourFn = fn(usize, &mut Tile, &mut StdRng, &CurrentHyperParams) -> Result<String, ()>; 
+type BehaviourFn = fn(usize, &mut Tile, &mut StdRng, &CurrentHyperParams) -> Result<String, ()>;
 
-const BEHAVIOURS: [BehaviourFn; 3] = [spend_gold_to_get_rep, mint_gold, collect_tax];
-const BEHAVIOUR_NAMES: [&str; 3] = ["spend_gold_to_get_rep", "mint_gold", "collect_tax"];
+// type AssingnedRoles
 
-fn mint_gold(calling_agent_id: usize, tile: &mut Tile, rng: &mut StdRng, hyperparams: &CurrentHyperParams) -> Result<String, ()> {
-    let total_gold: usize = tile.agents
-    .iter()
-    .map(|agent|agent.resources.get(&Resource::Gold).unwrap())
-    .sum();
-
-    let probability_to_mint =  1.0/(f64::powi(hyperparams.minting_difficulty_growth_rate.as_f64(), total_gold as i32));
-
-    if rng.gen_bool(probability_to_mint) {
-        *tile.agents[calling_agent_id].resources.entry(Resource::Gold).or_insert(0) += 1;
-
-        Ok(format!("Agent {} minted gold. Probability of success is {:.3}.\n", 
-        calling_agent_id,
-        probability_to_mint))
-    } else {
-        Ok(format!("Agent {} was not able to mint gold. Probability of success was {:.3}.\n",
-        calling_agent_id,
-        probability_to_mint))
-    }
+enum Game {
+    OneAgentBasicGame,
+    TwoAgentBasicGame,
 }
 
-fn collect_tax(calling_agent_id: usize, tile: &mut Tile, rng: &mut StdRng, _hyperparams: &CurrentHyperParams) -> Result<String, ()> {
-    let mut total_tax_collected: usize = 0;
+type GameProvider = fn() -> Game;
 
-    let ids_of_all_other_agents = {
-        let mut ids = (0..tile.agents.len()).collect_vec();
-        ids.remove(calling_agent_id);
-        ids
-    };
+// const BEHAVIOURS: [BehaviourFn; 3] = [spend_gold_to_get_rep, mint_gold, collect_tax];
+// const BEHAVIOUR_NAMES: [&str; 3] = ["spend_gold_to_get_rep", "mint_gold", "collect_tax"];
+
+// fn mint_gold(calling_agent_id: usize, tile: &mut Tile, rng: &mut StdRng, hyperparams: &CurrentHyperParams) -> Result<String, ()> {
+//     let total_gold: usize = tile.agents
+//     .iter()
+//     .map(|agent|agent.resources.get(&Resource::Gold).unwrap())
+//     .sum();
+
+//     let probability_to_mint =  1.0/(f64::powi(hyperparams.minting_difficulty_growth_rate.as_f64(), total_gold as i32));
+
+//     if rng.gen_bool(probability_to_mint) {
+//         *tile.agents[calling_agent_id].resources.entry(Resource::Gold).or_insert(0) += 1;
+
+//         Ok(format!("Agent {} minted gold. Probability of success is {:.3}.\n", 
+//         calling_agent_id,
+//         probability_to_mint))
+//     } else {
+//         Ok(format!("Agent {} was not able to mint gold. Probability of success was {:.3}.\n",
+//         calling_agent_id,
+//         probability_to_mint))
+//     }
+// }
+
+// fn collect_tax(calling_agent_id: usize, tile: &mut Tile, rng: &mut StdRng, _hyperparams: &CurrentHyperParams) -> Result<String, ()> {
+//     let mut total_tax_collected: usize = 0;
+
+//     let ids_of_all_other_agents = {
+//         let mut ids = (0..tile.agents.len()).collect_vec();
+//         ids.remove(calling_agent_id);
+//         ids
+//     };
     
-    for target_agent_id in ids_of_all_other_agents {
-        let reputation_about_target = tile.reputations[calling_agent_id][target_agent_id];
-        let reputation_about_caller = tile.reputations[target_agent_id][calling_agent_id];
-        let target_agent_gold = *tile.agents[target_agent_id].resources.get(&Resource::Gold).unwrap();
-        let tax: usize = (target_agent_gold as f64 * 0.01).floor() as usize;
+//     for target_agent_id in ids_of_all_other_agents {
+//         let reputation_about_target = tile.reputations[calling_agent_id][target_agent_id];
+//         let reputation_about_caller = tile.reputations[target_agent_id][calling_agent_id];
+//         let target_agent_gold = *tile.agents[target_agent_id].resources.get(&Resource::Gold).unwrap();
+//         let tax: usize = (target_agent_gold as f64 * 0.01).floor() as usize;
 
-        if (reputation_about_caller > reputation_about_target) && rng.gen_bool(0.5) {
-            *tile.agents[calling_agent_id].resources.entry(Resource::Gold).or_insert(0) += tax;
-            *tile.agents[target_agent_id].resources.entry(Resource::Gold).or_insert(0) -= tax;
-            total_tax_collected += tax;
-        }
-    }
+//         if (reputation_about_caller > reputation_about_target) && rng.gen_bool(0.5) {
+//             *tile.agents[calling_agent_id].resources.entry(Resource::Gold).or_insert(0) += tax;
+//             *tile.agents[target_agent_id].resources.entry(Resource::Gold).or_insert(0) -= tax;
+//             total_tax_collected += tax;
+//         }
+//     }
 
-    Ok(String::from(format!("Agent {} collected {} gold from taxes.\n", calling_agent_id, total_tax_collected)))
-}
+//     Ok(String::from(format!("Agent {} collected {} gold from taxes.\n", calling_agent_id, total_tax_collected)))
+// }
 
-fn spend_gold_to_get_rep(calling_agent_id: usize, tile: &mut Tile, _rng: &mut StdRng, _hyperparams: &CurrentHyperParams) -> Result<String, ()> {
-    let initial_agent_gold_amount = *tile.agents[calling_agent_id].resources.get(&Resource::Gold).unwrap_or(&0);
-    let gold_required = tile.agents.len() - 1;
+// fn spend_gold_to_get_rep(calling_agent_id: usize, tile: &mut Tile, _rng: &mut StdRng, _hyperparams: &CurrentHyperParams) -> Result<String, ()> {
+//     let initial_agent_gold_amount = *tile.agents[calling_agent_id].resources.get(&Resource::Gold).unwrap_or(&0);
+//     let gold_required = tile.agents.len() - 1;
 
-    if possble_to_subtract(initial_agent_gold_amount, gold_required) {
-        *tile.agents[calling_agent_id].resources.entry(Resource::Gold).or_insert(0) -= gold_required;
-        let ids_of_other_agents = {
-            let mut agent_ids = (0..tile.agents.len()).collect_vec();
-            agent_ids.remove(calling_agent_id);
-            agent_ids
-        };
+//     if possble_to_subtract(initial_agent_gold_amount, gold_required) {
+//         *tile.agents[calling_agent_id].resources.entry(Resource::Gold).or_insert(0) -= gold_required;
+//         let ids_of_other_agents = {
+//             let mut agent_ids = (0..tile.agents.len()).collect_vec();
+//             agent_ids.remove(calling_agent_id);
+//             agent_ids
+//         };
         
-        for id in ids_of_other_agents {
-            *tile.agents[id].resources.entry(Resource::Gold).or_insert(0) += 1;
-        }
+//         for id in ids_of_other_agents {
+//             *tile.agents[id].resources.entry(Resource::Gold).or_insert(0) += 1;
+//         }
 
-        tile.reputations.update_reputations_of_others_about_agent(calling_agent_id, |x| *x += 1.0);
-        Ok(format!("Agent {} spent {} gold to buy reputation.\n", calling_agent_id, gold_required))
+//         tile.reputations.update_reputations_of_others_about_agent(calling_agent_id, |x| *x += 1.0);
+//         Ok(format!("Agent {} spent {} gold to buy reputation.\n", calling_agent_id, gold_required))
         
-    } else {
-        Ok(format!("Agent {} has not enough gold to buy reputation ({} vs required {})\n", calling_agent_id, initial_agent_gold_amount, gold_required))
-    }
-}
-fn possble_to_subtract(value: usize, amount_to_substract: usize) -> bool {
-    if amount_to_substract <= value {
-        true
-    } else {
-        false
-    }
-}
+//     } else {
+//         Ok(format!("Agent {} has not enough gold to buy reputation ({} vs required {})\n", calling_agent_id, initial_agent_gold_amount, gold_required))
+//     }
+// }
+// fn possble_to_subtract(value: usize, amount_to_substract: usize) -> bool {
+//     if amount_to_substract <= value {
+//         true
+//     } else {
+//         false
+//     }
+// }
 
 type Resources = BTreeMap<Resource, usize>;
 
@@ -239,72 +248,72 @@ impl Tile {
     }
 }
 
-trait UpdateReputations {
-    fn update_reputations_of_others_about_agent<F>(&mut self, agent_id: usize, update_fn: F)
-    where F: Fn(&mut f64);
-}
+// trait UpdateReputations {
+//     fn update_reputations_of_others_about_agent<F>(&mut self, agent_id: usize, update_fn: F)
+//     where F: Fn(&mut f64);
+// }
 
-impl UpdateReputations for ReputationMatrix {
-    fn update_reputations_of_others_about_agent<F>(&mut self, agent_id: usize, update_fn: F)
-    where F: Fn(&mut f64) {
-        for row in self.iter_mut() {
-            if let Some(rep) = row.get_mut(agent_id) {
-                update_fn(rep);
-            }
-        }
-    }
-}
+// impl UpdateReputations for ReputationMatrix {
+//     fn update_reputations_of_others_about_agent<F>(&mut self, agent_id: usize, update_fn: F)
+//     where F: Fn(&mut f64) {
+//         for row in self.iter_mut() {
+//             if let Some(rep) = row.get_mut(agent_id) {
+//                 update_fn(rep);
+//             }
+//         }
+//     }
+// }
 
-fn generate_probability_distributions(number_of_probability_values: usize) -> Vec<Vec<f64>> {
-    match number_of_probability_values {
-        0 => {panic!("There should be at least one probability value in range.")},
-        1 => {
-            let len = BEHAVIOURS.len();
-            let probabilities_for_agent = vec![vec![1.0/(len as f64); len]];
-            probabilities_for_agent
-        }, 
-        _ => {
-            let mut probabilities_for_all_agents = Vec::new();
+// fn generate_probability_distributions(number_of_probability_values: usize) -> Vec<Vec<f64>> {
+//     match number_of_probability_values {
+//         0 => {panic!("There should be at least one probability value in range.")},
+//         1 => {
+//             let len = BEHAVIOURS.len();
+//             let probabilities_for_agent = vec![vec![1.0/(len as f64); len]];
+//             probabilities_for_agent
+//         }, 
+//         _ => {
+//             let mut probabilities_for_all_agents = Vec::new();
 
-            probability_distributions_recursion(
-                &mut probabilities_for_all_agents,
-                &mut Vec::new(),
-                number_of_probability_values - 1,
-                BEHAVIOURS.len() - 1,
-                number_of_probability_values,
-            );
+//             probability_distributions_recursion(
+//                 &mut probabilities_for_all_agents,
+//                 &mut Vec::new(),
+//                 number_of_probability_values - 1,
+//                 BEHAVIOURS.len() - 1,
+//                 number_of_probability_values,
+//             );
             
-            probabilities_for_all_agents
-        }
-    }
-}
+//             probabilities_for_all_agents
+//         }
+//     }
+// }
 
-fn probability_distributions_recursion(
-    probabilities_for_all_agents: &mut Vec<Vec<f64>>,
-    probabilities_for_agent: &mut Vec<f64>,
-    remaining_probability_steps: usize,
-    remaining_recursion_depth: usize,
-    number_of_probability_values: usize,
-) {
-    let probability_step: f64 = 1.0 / (number_of_probability_values - 1) as f64;
-    if remaining_recursion_depth == 0 {
-        let mut probabilities_for_storage = probabilities_for_agent.clone();
-        probabilities_for_storage.push(remaining_probability_steps as f64 * probability_step);
-        probabilities_for_all_agents.push(probabilities_for_storage);
-    } else {
-        for i in 0..=remaining_probability_steps {
-            let mut probabilities_for_recursion = probabilities_for_agent.clone();
-            probabilities_for_recursion.push(i as f64 * probability_step);
-            probability_distributions_recursion(
-                probabilities_for_all_agents, 
-                &mut probabilities_for_recursion, 
-                remaining_probability_steps - i, 
-                remaining_recursion_depth - 1,
-                number_of_probability_values,
-            );
-        }
-    }
-}
+// fn probability_distributions_recursion(
+//     probabilities_for_all_agents: &mut Vec<Vec<f64>>,
+//     probabilities_for_agent: &mut Vec<f64>,
+//     remaining_probability_steps: usize,
+//     remaining_recursion_depth: usize,
+//     number_of_probability_values: usize,
+// ) {
+//     let probability_step: f64 = 1.0 / (number_of_probability_values - 1) as f64;
+//     if remaining_recursion_depth == 0 {
+//         let mut probabilities_for_storage = probabilities_for_agent.clone();
+//         probabilities_for_storage.push(remaining_probability_steps as f64 * probability_step);
+//         probabilities_for_all_agents.push(probabilities_for_storage);
+//     } else {
+//         for i in 0..=remaining_probability_steps {
+//             let mut probabilities_for_recursion = probabilities_for_agent.clone();
+//             probabilities_for_recursion.push(i as f64 * probability_step);
+//             probability_distributions_recursion(
+//                 probabilities_for_all_agents, 
+//                 &mut probabilities_for_recursion, 
+//                 remaining_probability_steps - i, 
+//                 remaining_recursion_depth - 1,
+//                 number_of_probability_values,
+//             );
+//         }
+//     }
+// }
 
 fn hash_hyperparams(hyperparams: &CurrentHyperParams) -> u64 {
     let mut hasher = DefaultHasher::new();
@@ -493,12 +502,12 @@ fn read_config() -> (HyperParamRanges, Settings) {
                         .into_iter().map(HyperParam::ProbabilityResolution).collect();
                     let minting_difficulty_growth_rate_values = read_float_vec_entry(hp, "minting_difficulty_growth_rate_values")
                         .expect("File config.toml should contain minting_difficulty_growth_rate_values entry in [[Hyperparameters]] with at least one float value in a list.")
-                        .into_iter().map(HyperParam::MintingDifficultyGrowthRate).collect();
+                        .into_iter().map(HyperParam::ParameterForBehaviour).collect();
                     
                     let hp_ranges = HyperParamRanges {
                         seed_values: game_seed_values,
                         probability_resolution_values,
-                        minting_difficulty_growth_rate_values: minting_difficulty_growth_rate_values,
+                        parameter_for_behaviour_values: minting_difficulty_growth_rate_values,
                     };
 
                     return  (hp_ranges, settings)
@@ -548,10 +557,10 @@ fn main() {
         let behaviour_probs = generate_probability_distributions(hyperparams.probability_resolution);
         
         let num_of_agents = behaviour_probs.len();
-        let reputation_matrix = vec![vec![1f64; num_of_agents]; num_of_agents];
+        // let reputation_matrix = vec![vec![1f64; num_of_agents]; num_of_agents];
         
         // Agents should be in the same order as behaviour_probs due to the way agents were created.
-        let mut tile = Tile::new(vec![], reputation_matrix);
+        // let mut tile = Tile::new(vec![], reputation_matrix);
         for agent_behaviour_probs in behaviour_probs.iter() {
             let agent = Agent::new(BTreeMap::new(), agent_behaviour_probs.clone());
             tile.agents.push(agent);
