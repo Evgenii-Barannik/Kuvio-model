@@ -24,75 +24,61 @@ use std::cmp::min;
 // This is one of three complementary types.
 #[derive(Debug, Clone, Hash)]
 enum HyperParam { 
-    // This variant can be made to contain usize num (that can be cast to u64 before use because u64 is required),
-    // but we want to retain type variability for hyperparameters anyway.
-    GameSeed(u64), 
-    GameTickCount(usize),
+    Seed(u64), 
     ProbabilityResolution(usize),
-    MiningDifficultyGrowthRate(OrderedFloat<f64>),
-    TaxFraction(OrderedFloat<f64>),
+    MintingDifficultyGrowthRate(OrderedFloat<f64>),
 }
-
-// This tuple exists to make destructuring of hyperparameter combinations more convenient.
-// This is one of three complementary types.
-type HyperParamCombination = (u64, usize, usize, OrderedFloat<f64>, OrderedFloat<f64>); 
 
 /// This is one of three complementary types.
 #[derive(Debug, Clone, Hash)]
 struct HyperParamRanges { 
-    game_seed_values: Vec<HyperParam>,
-    game_tick_count_values: Vec<HyperParam>,
+    seed_values: Vec<HyperParam>,
     probability_resolution_values: Vec<HyperParam>,
-    mining_difficulty_growth_rate_values: Vec<HyperParam>,
-    tax_fraction_values: Vec<HyperParam>,
+    minting_difficulty_growth_rate_values: Vec<HyperParam>,
 }
+
+// This type exists to make destructuring of hyperparameter combinations more convenient.
+// This is one of three complementary types.
+#[derive(Debug, Hash)]
+struct CurrentHyperParams {
+    seed: u64,
+    probability_resolution: usize,
+    minting_difficulty_growth_rate: OrderedFloat<f64>,
+}
+
         
 #[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Hash, Clone, EnumIter)]
 enum Resource {
     Gold,
 }
 
-struct Cache {
-    last_computed_prob_to_mint: f64, // Will be mutated
-    difficulty_growth_rate: f64, 
-    tax_fraction: f64,
-}
-
-impl Cache {
-    fn update_chance_to_mine_gold(&mut self, tile: &Tile) {
-        let total_gold: usize = tile.agents
-        .iter()
-        .map(|agent|agent.resources.get(&Resource::Gold).unwrap())
-        .sum();
-
-        self.last_computed_prob_to_mint = 1.0/(f64::powi(self.difficulty_growth_rate, total_gold as i32));
-    }
-}
-
-type BehaviourFn = fn(usize, &mut Tile, &mut StdRng, &mut Cache) -> Result<String, ()>; 
+type BehaviourFn = fn(usize, &mut Tile, &mut StdRng, &CurrentHyperParams) -> Result<String, ()>; 
 
 const BEHAVIOURS: [BehaviourFn; 3] = [spend_gold_to_get_rep, mint_gold, collect_tax];
 const BEHAVIOUR_NAMES: [&str; 3] = ["spend_gold_to_get_rep", "mint_gold", "collect_tax"];
 
-fn mint_gold(calling_agent_id: usize, tile: &mut Tile, rng: &mut StdRng, cache: &mut Cache) -> Result<String, ()> {
-    let probability_to_mint = cache.last_computed_prob_to_mint;
+fn mint_gold(calling_agent_id: usize, tile: &mut Tile, rng: &mut StdRng, hyperparams: &CurrentHyperParams) -> Result<String, ()> {
+    let total_gold: usize = tile.agents
+    .iter()
+    .map(|agent|agent.resources.get(&Resource::Gold).unwrap())
+    .sum();
+
+    let probability_to_mint =  1.0/(f64::powi(hyperparams.minting_difficulty_growth_rate.as_f64(), total_gold as i32));
 
     if rng.gen_bool(probability_to_mint) {
         *tile.agents[calling_agent_id].resources.entry(Resource::Gold).or_insert(0) += 1;
-        cache.update_chance_to_mine_gold(&tile);
 
-        Ok(format!("Agent {} mined gold. Probability of success was {:.3}, now it is {:.3}.\n", 
+        Ok(format!("Agent {} minted gold. Probability of success is {:.3}.\n", 
         calling_agent_id,
-        probability_to_mint,
-        cache.last_computed_prob_to_mint))
+        probability_to_mint))
     } else {
-        Ok(format!("Agent {} was not able to mine gold. Probability of success was {:.3}.\n",
+        Ok(format!("Agent {} was not able to mint gold. Probability of success was {:.3}.\n",
         calling_agent_id,
         probability_to_mint))
     }
 }
 
-fn collect_tax(calling_agent_id: usize, tile: &mut Tile, rng: &mut StdRng, cache: &mut Cache) -> Result<String, ()> {
+fn collect_tax(calling_agent_id: usize, tile: &mut Tile, rng: &mut StdRng, _hyperparams: &CurrentHyperParams) -> Result<String, ()> {
     let mut total_tax_collected: usize = 0;
 
     let ids_of_all_other_agents = {
@@ -105,7 +91,7 @@ fn collect_tax(calling_agent_id: usize, tile: &mut Tile, rng: &mut StdRng, cache
         let reputation_about_target = tile.reputations[calling_agent_id][target_agent_id];
         let reputation_about_caller = tile.reputations[target_agent_id][calling_agent_id];
         let target_agent_gold = *tile.agents[target_agent_id].resources.get(&Resource::Gold).unwrap();
-        let tax: usize = (target_agent_gold as f64 * cache.tax_fraction).floor() as usize;
+        let tax: usize = (target_agent_gold as f64 * 0.01).floor() as usize;
 
         if (reputation_about_caller > reputation_about_target) && rng.gen_bool(0.5) {
             *tile.agents[calling_agent_id].resources.entry(Resource::Gold).or_insert(0) += tax;
@@ -117,7 +103,7 @@ fn collect_tax(calling_agent_id: usize, tile: &mut Tile, rng: &mut StdRng, cache
     Ok(String::from(format!("Agent {} collected {} gold from taxes.\n", calling_agent_id, total_tax_collected)))
 }
 
-fn spend_gold_to_get_rep(calling_agent_id: usize, tile: &mut Tile, _rng: &mut StdRng, _cache: &mut Cache) -> Result<String, ()> {
+fn spend_gold_to_get_rep(calling_agent_id: usize, tile: &mut Tile, _rng: &mut StdRng, _hyperparams: &CurrentHyperParams) -> Result<String, ()> {
     let initial_agent_gold_amount = *tile.agents[calling_agent_id].resources.get(&Resource::Gold).unwrap_or(&0);
     let gold_required = tile.agents.len() - 1;
 
@@ -157,7 +143,7 @@ struct BehaviourProb {
 }
 
 #[derive(Debug, Clone)]
-struct Agent {
+struct Agent    {
     behaviours: Vec<BehaviourProb>,
     resources: Resources,
 } 
@@ -194,11 +180,7 @@ fn log_behaviour_probs(behaviour_probs: &Vec<Vec<f64>>, log: &mut String) {
     }
     log.push_str("\n");
 }
-fn log_general_information (hyperparameters: &HyperParamCombination, log: &mut String) {
-    let (game_seed, game_tick_count, probability_resolution, mining_difficulty_growth_rate, tax_fraction) = hyperparameters;
-    log.push_str(&format!("Number of possible probability values for one behaviour: {},\nGame ticks count: {},\nGame seed: {:?},\nMining difficulty growth rate: {:?},\nTax fraction: {:?}\n\n",
-    probability_resolution, game_tick_count, game_seed, mining_difficulty_growth_rate, tax_fraction));
-}
+
 fn log_resources (agents: &Vec<Agent>, log: &mut String) {
     log.push_str("IDs and final resources:\n");
     for (id, agent) in agents.iter().enumerate() {
@@ -234,7 +216,7 @@ impl Tile {
         Tile{agents, reputations}
     }
 
-    fn execute_behaviour(&mut self, rng: &mut StdRng, cache: &mut Cache) -> String {
+    fn execute_behaviour(&mut self, rng: &mut StdRng, hyperparams: &CurrentHyperParams) -> String {
         let agent_ids: Vec<usize> = (0..self.agents.len()).collect();
         let mut time_logs = String::new();
         for id in agent_ids {
@@ -249,7 +231,7 @@ impl Tile {
             // First-come, first-served resource extraction system:
             // If the resource change is possible (thus behaviour is also possible) for the agent we are currently iterating over, the change will occur.
             // Consequently, other agents may fail in attempting to execute exactly the same behavior in the same game tick due to a lack of resources in the Tile.
-            let result = chosen_behaviour(id, self, rng, cache);
+            let result = chosen_behaviour(id, self, rng, hyperparams);
             
             time_logs.push_str(&result.ok().unwrap())
         }
@@ -324,7 +306,7 @@ fn probability_distributions_recursion(
     }
 }
 
-fn hash_hyperparams(hyperparams: &HyperParamCombination) -> u64 {
+fn hash_hyperparams(hyperparams: &CurrentHyperParams) -> u64 {
     let mut hasher = DefaultHasher::new();
     hyperparams.hash(&mut hasher);
     hasher.finish()
@@ -334,11 +316,9 @@ macro_rules! for_each_hyperparam_combination {
     ($callback:expr) => {{
         let (hps, settings) = read_config();
         vec![
-             &hps.game_seed_values,
-             &hps.game_tick_count_values,
+             &hps.seed_values,
              &hps.probability_resolution_values,
-             &hps.mining_difficulty_growth_rate_values,
-             &hps.tax_fraction_values,
+             &hps.minting_difficulty_growth_rate_values,
              ]
             .into_iter()
             .multi_cartesian_product()
@@ -346,20 +326,17 @@ macro_rules! for_each_hyperparam_combination {
             .into_par_iter()
             .for_each(|hyperparams| {
                 if let [
-                        HyperParam::GameSeed(game_seed),
-                        HyperParam::GameTickCount(game_tick_count),
+                        HyperParam::Seed(seed),
                         HyperParam::ProbabilityResolution(probability_resolution),
-                        HyperParam::MiningDifficultyGrowthRate(mining_difficulty_growth_rate),
-                        HyperParam::TaxFraction(tax_fraction)
+                        HyperParam::MintingDifficultyGrowthRate(minting_difficulty_growth_rate),
                        ] = &hyperparams[..] {
                         
-                        $callback(((
-                            *game_seed,
-                            *game_tick_count,
-                            *probability_resolution,
-                            *mining_difficulty_growth_rate,
-                            *tax_fraction
-                        ), settings.clone()));
+                        $callback((
+                            CurrentHyperParams {
+                                seed: *seed,
+                                probability_resolution: *probability_resolution,
+                                minting_difficulty_growth_rate: *minting_difficulty_growth_rate,
+                            }, settings.clone()));
                 } else {
                     panic!("Hyperparameters were not parsed correctly.");
                 }
@@ -458,6 +435,7 @@ pub fn try_to_read_field_as_vec(map: &Map<String, Value>, key: &str) -> Option<V
 struct Settings {
     plotting_frame_subselection_factor: usize,
     full_game_logs: bool,
+    tick_count: usize,
 }
 
 fn read_config() -> (HyperParamRanges, Settings) {
@@ -473,6 +451,7 @@ fn read_config() -> (HyperParamRanges, Settings) {
     let mut settings = Settings { 
         plotting_frame_subselection_factor: 1usize, // Default value
         full_game_logs: false, // Default value
+        tick_count: 500,  // Default value
     };
     
     for file in &toml_files {
@@ -485,6 +464,7 @@ fn read_config() -> (HyperParamRanges, Settings) {
 
                     let setting1 = "plotting_frame_subselection_factor";
                     let setting2 = "full_game_logs";
+                    let setting3 = "tick_count";
                     if let Some(value) = setting.get(setting1) {
                         let extracted_value = value.as_integer().unwrap() as usize;
                         settings.plotting_frame_subselection_factor = extracted_value;
@@ -495,6 +475,11 @@ fn read_config() -> (HyperParamRanges, Settings) {
                         settings.full_game_logs = extracted_value;
                         println!("{}: {:?}", setting2, extracted_value);
                     }
+                    if let Some(value) = setting.get(setting3) {
+                        let extracted_value = value.as_integer().unwrap() as usize;
+                        settings.tick_count = extracted_value;
+                        println!("{}: {:?}", setting3, extracted_value);
+                    }
                 };
             }
             
@@ -502,26 +487,18 @@ fn read_config() -> (HyperParamRanges, Settings) {
                 for hp in hp_map {
                     let game_seed_values = read_usize_vec_entry(hp, "game_seed_values")
                         .expect("File config.toml should contain game_seed_values entry in [[Hyperparameters]] with at least one usize value in a list.")
-                        .into_iter().map(|seed| HyperParam::GameSeed(seed as u64)).collect();
-                    let game_tick_count_values = read_usize_vec_entry(hp, "game_tick_count_values")
-                        .expect("File config.toml should contain game_tick_count_values entry in [[Hyperparameters]] with at least one usize value in a list.")
-                        .into_iter().map(HyperParam::GameTickCount).collect();
+                        .into_iter().map(|seed| HyperParam::Seed(seed as u64)).collect();
                     let probability_resolution_values = read_usize_vec_entry(hp, "probability_resolution_values")
                         .expect("File config.toml should contain probability_resolution_values entry in [[Hyperparameters]] with at least one usize value in a list.")
                         .into_iter().map(HyperParam::ProbabilityResolution).collect();
-                    let mining_difficulty_growth_rate_values = read_float_vec_entry(hp, "mining_difficulty_growth_rate_values")
-                        .expect("File config.toml should contain mining_difficulty_growth_rate_values entry in [[Hyperparameters]] with at least one float value in a list.")
-                        .into_iter().map(HyperParam::MiningDifficultyGrowthRate).collect();
-                    let tax_fraction_values = read_float_vec_entry(hp, "tax_fraction_values")
-                        .expect("File config.toml should contain tax_fraction_values entry in [[Hyperparameters]] with at least one float value in a list.")
-                        .into_iter().map(HyperParam::TaxFraction).collect();
+                    let minting_difficulty_growth_rate_values = read_float_vec_entry(hp, "minting_difficulty_growth_rate_values")
+                        .expect("File config.toml should contain minting_difficulty_growth_rate_values entry in [[Hyperparameters]] with at least one float value in a list.")
+                        .into_iter().map(HyperParam::MintingDifficultyGrowthRate).collect();
                     
                     let hp_ranges = HyperParamRanges {
-                        game_seed_values,
-                        game_tick_count_values,
+                        seed_values: game_seed_values,
                         probability_resolution_values,
-                        mining_difficulty_growth_rate_values,
-                        tax_fraction_values,
+                        minting_difficulty_growth_rate_values: minting_difficulty_growth_rate_values,
                     };
 
                     return  (hp_ranges, settings)
@@ -567,9 +544,8 @@ fn main() {
     fs::create_dir_all("output").unwrap();
 
     // rayon::ThreadPoolBuilder::new().num_threads(1).build_global().unwrap();
-    for_each_hyperparam_combination!(|(hyperparams, settings): (HyperParamCombination, Settings)| {
-        let (game_seed, game_tick_count, probability_resolution, difficulty_growth_rate, tax_fraction_value) = hyperparams;
-        let behaviour_probs = generate_probability_distributions(probability_resolution);
+    for_each_hyperparam_combination!(|(hyperparams, settings): (CurrentHyperParams, Settings)| {
+        let behaviour_probs = generate_probability_distributions(hyperparams.probability_resolution);
         
         let num_of_agents = behaviour_probs.len();
         let reputation_matrix = vec![vec![1f64; num_of_agents]; num_of_agents];
@@ -586,17 +562,11 @@ fn main() {
         let plot_file_pathname = format!("output/{}.gif", hash);
         let mut root = BitMapBackend::gif(plot_file_pathname, (640, 480), 100).unwrap().into_drawing_area();
 
-        let mut rng = StdRng::seed_from_u64(game_seed as u64);
-        let mut cache = Cache {
-            last_computed_prob_to_mint: 1.0,
-            difficulty_growth_rate: difficulty_growth_rate.as_f64(),
-            tax_fraction: tax_fraction_value.as_f64(),
-            
-        };
+        let mut rng = StdRng::seed_from_u64(hyperparams.seed as u64);
         let mut optional_log = String::new();
         
-        for tick in 0..game_tick_count {
-            let optional_log_fragment = tile.execute_behaviour(&mut rng, &mut cache); 
+        for tick in 0..settings.tick_count {
+            let optional_log_fragment = tile.execute_behaviour(&mut rng, &hyperparams); 
             
             if settings.full_game_logs {
                 optional_log.push_str(&format! ("---------- Game tick {} ----------\n", tick));
@@ -610,7 +580,7 @@ fn main() {
         }
         
         let mut summary_log = String::new();
-        log_general_information(&hyperparams, &mut summary_log);
+        summary_log.push_str(&format!("{:#?}\n{:#?}\n", hyperparams, settings));
         log_behaviour_probs(&behaviour_probs, &mut summary_log);
         log_resources(&tile.agents, &mut summary_log);
         log_reputations(&tile.reputations, &mut summary_log);

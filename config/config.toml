@@ -1,12 +1,11 @@
 [[Hyperparameters]]
 
 game_seed_values = [2]
-game_tick_count_values = [5000]
 probability_resolution_values = [25]
-mining_difficulty_growth_rate_values = [1.000025]
-tax_fraction_values = [0.01]
+minting_difficulty_growth_rate_values = [1.000025]
 
 [[Settings]]
 
 plotting_frame_subselection_factor = 50
 full_game_logs = false
+tick_count = 501
