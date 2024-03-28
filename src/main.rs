@@ -5,7 +5,8 @@ use std::collections::{BTreeMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::fs::write;
 use itertools::Itertools;
-use std::iter::zip;
+// use std::iter::zip;
+use std::iter::IntoIterator;
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::{Rng, rngs::StdRng, SeedableRng};
 use strum::IntoEnumIterator;
@@ -22,16 +23,16 @@ use std::cmp::min;
 
 type AgentID = usize;
 
-#[derive(Eq, Ord, PartialEq, PartialOrd)]
+#[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Hash, Clone, EnumIter)]
 enum Resource {
     Coins,
 }
 
 type Resources = BTreeMap<Resource, usize>;
-type Action = fn(Vec<Resources>) -> Vec<Resources>;
-type ActionSetModification = fn(Vec<&Action>) -> Vec<&Action>;
-type Behaviour = fn(Vec<&Action>, DecisionMakingData, &mut StdRng) -> Action;
-struct DecisionMakingData {} // TODO
+type Action = fn(&mut Resources);
+type ActionVecModification = fn(&mut Vec<Action>);
+type Behaviour = fn(Vec<Action>, DecisionMakingData, &mut StdRng) -> Action;
+type DecisionMakingData = Vec<f64>;
 
 struct Agent {
     resources: Resources,
@@ -39,12 +40,38 @@ struct Agent {
     behaviour: Behaviour,
 }
 
+impl Agent {
+    fn new(initial_resources: Resources, actions: Vec<Action>, behaviour: Behaviour) -> Agent {
+        let mut zeroed_resources = Resource::iter().map(|r| (r, 0)).collect::<Resources>();
+        for (resource, amount) in initial_resources {
+            zeroed_resources.insert(resource, amount);
+        }
+
+        Agent {resources: zeroed_resources, actions, behaviour}
+    }
+
+}
 
 struct Game  {
-    roles: BTreeMap<AnyRole, Vec<AgentID>>,
-    action_set_modifications: BTreeMap<AnyRole, ActionSetModification>,
+    mods: BTreeMap<AnyRole, ActionVecModification>,
 }
-type GameProvider = fn() -> Game;
+type GameProvider = fn() -> Game;   
+
+impl Game {
+    fn transform_actions(&self, assigned_roles: BTreeMap<AnyRole, &Agent>) -> Vec<Action> {
+        let mut all_modified_actions: Vec<Action> = Vec::new(); 
+
+        for (assigned_role, agent) in assigned_roles.iter() {
+            if let  Some(action_modifier) = self.mods.get(assigned_role) {
+                let mut cloned_actions = agent.actions.clone();
+                action_modifier(&mut cloned_actions);
+                return cloned_actions
+            } 
+            // TODO Make work for multiple agents alltogether (with slices?)
+        }
+        panic!("Modied actions not created.")
+    }
+}
 
 type ReputationMatrix = Vec<Vec<f64>>;
 
@@ -54,89 +81,101 @@ struct Tile {
     reputations: ReputationMatrix,
 }
 
-///
+impl Tile {
+    fn new(agents: Vec<Agent>, resources: Resources, reputations: Vec<Vec<f64>>) -> Tile {
+        let mut zeroed_resources = Resource::iter().map(|r| (r, 0)).collect::<Resources>();
+        for (resource, amount) in resources {
+            zeroed_resources.insert(resource, amount);
+        }
 
-enum AnyRole {
-    KingdomRole,
-    LoversRole,
+        Tile{agents, resources: zeroed_resources, reputations}
+    }
 }
 
+///
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum AnyRole {
+    KingdomRole(KingdomRole),
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
 enum KingdomRole {
     King,
-    Guard,
-    Peasant,
 }
 
-enum LoversRole {
-    LoverOne,
-    LoverTwo,
+fn pass(res: &mut Resources) {}
+
+const TRIVIAL_ACTIONS: [Action; 1] = [pass];
+
+fn trivial_modification(actions: &mut Vec<Action>) -> Vec<Action> {
+    actions.clone()
+}
+
+fn mint(res: &mut Resources) {
+    *res.entry(Resource::Coins).or_insert(0) += 1;
+}
+
+fn add_mint(actions: &mut Vec<Action>) {
+    actions.push(mint)
+}
+
+// const WEIGHTED_RNG_BEHAVIOUR: Behaviour = |actions: Vec<&Action>, data: DecisionMakingData, rng: &mut StdRng| -> Action {
+//     let weighted_distribution = WeightedIndex::new(&data).unwrap();
+//     let chosen_index = weighted_distribution.sample(rng);
+//     actions[chosen_index].clone()
+// };
+
+// type Behaviour = fn(Vec<Action>, DecisionMakingData, &mut StdRng) -> Action;
+
+fn weighted_rng_behaviour(actions: Vec<Action>, data: DecisionMakingData, rng: &mut StdRng) -> Action {
+    let weighted_distribution = WeightedIndex::new(&data).unwrap();
+    let chosen_index = weighted_distribution.sample(rng);
+    actions[chosen_index].clone()
+}
+
+fn mint_game_provider() -> Game {
+    let mut mods = BTreeMap::new();
+    mods.insert(AnyRole::KingdomRole(KingdomRole::King), add_mint as ActionVecModification);
+    Game {mods: mods}
 }
 
 
-const PASS: Action = |mut resources_arr: Vec<Resources>| -> Vec<Resources> {
-    resources_arr
-};
-
-const MINT: Action = |mut resources_arr: Vec<Resources>| -> Vec<Resources> {
-    for res in &mut resources_arr {
-        *res.entry(Resource::Coins).or_insert(0) += 1;
-    }
-    resources_arr
-};
-const UNIVERSAL_ACTIONS: [Action; 2] = [PASS, MINT];
-
-const BEHAVIOUR1
-
+// fn generate_normalized_vector(rng: &mut impl Rng, n: usize) -> Vec<f64> {
+//     let vec: Vec<f64> = rng.sample_iter(Uniform::new(0.0, 1.0)).take(n).collect();
+//     let sum: f64 = vec.iter().sum();
+//     vec.into_iter().map(|x| x / sum).collect()
+// }
 
 fn main() {
     let timer = Instant::now();
     fs::create_dir_all("output").unwrap();
 
-    // // rayon::ThreadPoolBuilder::new().num_threads(1).build_global().unwrap();
-    // for_each_hyperparam_combination!(|(hyperparams, settings): (CurrentHyperParams, Settings)| {
-    //     let behaviour_probs = generate_probability_distributions(hyperparams.probability_resolution);
-        
-    //     let num_of_agents = behaviour_probs.len();
-    //     // let reputation_matrix = vec![vec![1f64; num_of_agents]; num_of_agents];
-        
-    //     // Agents should be in the same order as behaviour_probs due to the way agents were created.
-    //     // let mut tile = Tile::new(vec![], reputation_matrix);
-    //     for agent_behaviour_probs in behaviour_probs.iter() {
-    //         let agent = Agent::new(BTreeMap::new(), agent_behaviour_probs.clone());
-    //         tile.agents.push(agent);
-    //     }
-        
-    //     let hash = hash_hyperparams(&hyperparams);
-        
-    //     let plot_file_pathname = format!("output/{}.gif", hash);
-    //     let mut root = BitMapBackend::gif(plot_file_pathname, (640, 480), 100).unwrap().into_drawing_area();
+    let num_of_agents: usize = 10;
+    let num_of_ticks: usize = 100;
+    let kingdom_subselection_factor: usize = 1;
+    let seed: usize = 2;
 
-    //     let mut rng = StdRng::seed_from_u64(hyperparams.seed as u64);
-    //     let mut optional_log = String::new();
-        
-    //     for tick in 0..settings.tick_count {
-    //         let optional_log_fragment = tile.execute_behaviour(&mut rng, &hyperparams); 
-            
-    //         if settings.full_game_logs {
-    //             optional_log.push_str(&format! ("---------- Game tick {} ----------\n", tick));
-    //             optional_log.push_str(&optional_log_fragment);
-    //             optional_log.push_str("\n");
-    //         }
-            
-    //         if (tick % settings.plotting_frame_subselection_factor) == 0 {
-    //             plot_gold_distribution(&tile.agents, &behaviour_probs, &mut root, (tick as u64).try_into().unwrap());
-    //         }
-    //     }
-        
-    //     let mut summary_log = String::new();
-    //     summary_log.push_str(&format!("{:#?}\n{:#?}\n", hyperparams, settings));
-    //     log_behaviour_probs(&behaviour_probs, &mut summary_log);
-    //     log_resources(&tile.agents, &mut summary_log);
-    //     log_reputations(&tile.reputations, &mut summary_log);
-        
-    //     let log_file_pathname = format!("output/{}.txt", hash);
-    //     write(&log_file_pathname, summary_log + &optional_log).unwrap();
-    // });
+    let mut reputations = vec![vec![1f64; num_of_agents]; num_of_agents];
+    let mut rng = StdRng::seed_from_u64(seed as u64);
+    let mut tile = Tile::new(vec![], BTreeMap::new(), reputations);
+
+    for i in 0..num_of_agents {
+        let agent = Agent::new(BTreeMap::new(), TRIVIAL_ACTIONS.to_vec(), weighted_rng_behaviour);
+        tile.agents.push(agent);
+    }
+
+    // let normalized_vector = generate_normalized_vector(&mut rng, 2);
+
+    for tick in 0..num_of_ticks {
+        let mut games: Vec<Game> = vec![];
+        if (tick % kingdom_subselection_factor) == 0 {
+            // games.push(MINT_GAME_PROVIDER());
+       }
+       
+       for game in games {
+            // game.
+       }
+    }
 
     println!("Execution time: {:.3} s", timer.elapsed().as_secs_f64());
 }
