@@ -1,3 +1,4 @@
+use std::borrow::BorrowMut;
 use std::fs;
 use std::time::Instant;
 use std::vec;
@@ -17,11 +18,13 @@ use toml::Value;
 use std::path::PathBuf;
 use walkdir::WalkDir;
 use ordered_float::OrderedFloat; // Wrapper over f64 to support hashing
-use rayon::prelude::*;
 use std::cmp::min;
+use rand::distributions::Uniform; 
+use rayon::prelude::*;
 // use rayon::ThreadPoolBuilder;
+use std::iter::zip;
 
-type AgentID = usize;
+// type AgentID = usize;
 
 #[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Hash, Clone, EnumIter)]
 enum Resource {
@@ -31,23 +34,26 @@ enum Resource {
 type Resources = BTreeMap<Resource, usize>;
 type Action = fn(&mut Resources);
 type ActionVecModification = fn(&mut Vec<Action>);
-type Behaviour = fn(Vec<Action>, DecisionMakingData, &mut StdRng) -> Action;
+type GameProvider = fn() -> Game;   
+type GameAssigner = fn(&Game, Vec<Agent>) -> BTreeMap<AnyRole, &Agent>;
+type Decider = fn(Vec<Action>, DecisionMakingData, &mut StdRng) -> Action;
 type DecisionMakingData = Vec<f64>;
 
+#[derive(Clone)]
 struct Agent {
     resources: Resources,
     actions: Vec<Action>,
-    behaviour: Behaviour,
+    decider: Decider,
 }
 
 impl Agent {
-    fn new(initial_resources: Resources, actions: Vec<Action>, behaviour: Behaviour) -> Agent {
+    fn new(initial_resources: Resources, actions: Vec<Action>, decider: Decider) -> Agent {
         let mut zeroed_resources = Resource::iter().map(|r| (r, 0)).collect::<Resources>();
         for (resource, amount) in initial_resources {
             zeroed_resources.insert(resource, amount);
         }
 
-        Agent {resources: zeroed_resources, actions, behaviour}
+        Agent {resources: zeroed_resources, actions, decider}
     }
 
 }
@@ -55,15 +61,14 @@ impl Agent {
 struct Game  {
     mods: BTreeMap<AnyRole, ActionVecModification>,
 }
-type GameProvider = fn() -> Game;   
 
 impl Game {
-    fn transform_actions(&self, assigned_roles: BTreeMap<AnyRole, &Agent>) -> Vec<Action> {
+    fn transform_actions(&self, assigned_roles: &BTreeMap<AnyRole, usize>, agents: Vec<Agent>) -> Vec<Action> {
         let mut all_modified_actions: Vec<Action> = Vec::new(); 
 
-        for (assigned_role, agent) in assigned_roles.iter() {
+        for (assigned_role, agent_id) in assigned_roles.iter() {
             if let  Some(action_modifier) = self.mods.get(assigned_role) {
-                let mut cloned_actions = agent.actions.clone();
+                let mut cloned_actions = agents[*agent_id].actions.clone();
                 action_modifier(&mut cloned_actions);
                 return cloned_actions
             } 
@@ -93,12 +98,12 @@ impl Tile {
 }
 
 ///
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
 enum AnyRole {
     KingdomRole(KingdomRole),
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
 enum KingdomRole {
     King,
 }
@@ -107,8 +112,7 @@ fn pass(res: &mut Resources) {}
 
 const TRIVIAL_ACTIONS: [Action; 1] = [pass];
 
-fn trivial_modification(actions: &mut Vec<Action>) -> Vec<Action> {
-    actions.clone()
+fn trivial_modification(actions: &mut Vec<Action>) {
 }
 
 fn mint(res: &mut Resources) {
@@ -119,15 +123,7 @@ fn add_mint(actions: &mut Vec<Action>) {
     actions.push(mint)
 }
 
-// const WEIGHTED_RNG_BEHAVIOUR: Behaviour = |actions: Vec<&Action>, data: DecisionMakingData, rng: &mut StdRng| -> Action {
-//     let weighted_distribution = WeightedIndex::new(&data).unwrap();
-//     let chosen_index = weighted_distribution.sample(rng);
-//     actions[chosen_index].clone()
-// };
-
-// type Behaviour = fn(Vec<Action>, DecisionMakingData, &mut StdRng) -> Action;
-
-fn weighted_rng_behaviour(actions: Vec<Action>, data: DecisionMakingData, rng: &mut StdRng) -> Action {
+fn weighted_rng_decider(actions: Vec<Action>, data: DecisionMakingData, rng: &mut StdRng) -> Action {
     let weighted_distribution = WeightedIndex::new(&data).unwrap();
     let chosen_index = weighted_distribution.sample(rng);
     actions[chosen_index].clone()
@@ -139,19 +135,36 @@ fn mint_game_provider() -> Game {
     Game {mods: mods}
 }
 
+fn trivial_assigner(game: &Game, agents: Vec<Agent>) -> BTreeMap<AnyRole, usize> {
+    let mut assigned_agents: BTreeMap<AnyRole, usize> = BTreeMap::new();
+    
+    for (role, index) in game.mods.keys().zip(0..agents.len()) {
+        assigned_agents.insert(role.to_owned(), index);
+    }
+    
+    assigned_agents
+}
 
-// fn generate_normalized_vector(rng: &mut impl Rng, n: usize) -> Vec<f64> {
-//     let vec: Vec<f64> = rng.sample_iter(Uniform::new(0.0, 1.0)).take(n).collect();
-//     let sum: f64 = vec.iter().sum();
-//     vec.into_iter().map(|x| x / sum).collect()
-// }
+fn generate_normalized_vector(rng: &mut impl Rng, n: usize) -> Vec<f64> {
+    let vec: Vec<f64> = rng.sample_iter(Uniform::new(0.0, 1.0)).take(n).collect();
+    let sum: f64 = vec.iter().sum();
+    vec.into_iter().map(|x| x / sum).collect()
+}
+
+fn log_resources (agents: &Vec<Agent>, log: &mut String) {
+    log.push_str("IDs and final resources:\n");
+    for (id, agent) in agents.iter().enumerate() {
+        log.push_str(&format!("{:2}  {:?}\n", id, &agent.resources));
+    }
+    log.push_str("\n");
+}
 
 fn main() {
     let timer = Instant::now();
     fs::create_dir_all("output").unwrap();
 
     let num_of_agents: usize = 10;
-    let num_of_ticks: usize = 100;
+    let num_of_ticks: usize = 1000;
     let kingdom_subselection_factor: usize = 1;
     let seed: usize = 2;
 
@@ -160,21 +173,35 @@ fn main() {
     let mut tile = Tile::new(vec![], BTreeMap::new(), reputations);
 
     for i in 0..num_of_agents {
-        let agent = Agent::new(BTreeMap::new(), TRIVIAL_ACTIONS.to_vec(), weighted_rng_behaviour);
+        let agent = Agent::new(
+            BTreeMap::new(),
+            TRIVIAL_ACTIONS.to_vec(),
+            weighted_rng_decider,
+        );
         tile.agents.push(agent);
     }
 
-    // let normalized_vector = generate_normalized_vector(&mut rng, 2);
-
+    
     for tick in 0..num_of_ticks {
         let mut games: Vec<Game> = vec![];
         if (tick % kingdom_subselection_factor) == 0 {
-            // games.push(MINT_GAME_PROVIDER());
+            games.push(mint_game_provider());
+        }
+        
+        for game in games {
+            let assigned_agents = trivial_assigner(&game, tile.agents.clone());
+            let new_actions = game.transform_actions(&assigned_agents, tile.agents.clone());
+            let normalized_vector = generate_normalized_vector(&mut rng, new_actions.len());
+            let choosen_action = weighted_rng_decider(new_actions, normalized_vector, &mut rng); 
+
+            let agent_index = *assigned_agents.first_key_value().unwrap().1; // Dereference to get usize directly
+            choosen_action(&mut tile.agents[agent_index].resources); // Use usize to index
        }
-       
-       for game in games {
-            // game.
-       }
+
+       let mut summary_log = String::new();
+       log_resources(&tile.agents, &mut summary_log);
+       let log_file_pathname = format!("output/{}.txt", "Test");
+       write(&log_file_pathname, summary_log).unwrap();
     }
 
     println!("Execution time: {:.3} s", timer.elapsed().as_secs_f64());
