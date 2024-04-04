@@ -2,7 +2,7 @@ use std::borrow::BorrowMut;
 use std::fs;
 use std::time::Instant;
 use std::vec;
-use std::collections::{BTreeMap, hash_map::DefaultHasher};
+use std::collections::{BTreeMap};
 use std::hash::{Hash, Hasher};
 use std::fs::write;
 use std::vec::Drain;
@@ -26,40 +26,28 @@ use std::iter::zip;
 use rand::prelude::SliceRandom;
 // use strum::IntoEnumIterator;
 
+pub mod engine;
+pub mod io;
+use engine::*;
+use io::*;
+
 #[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Hash, Clone, EnumIter)]
-enum Resource {
+pub enum AnyResource {
     Coins,
 }
 
-type AgentID = usize;
-type Resources = BTreeMap<Resource, usize>;
-type Action = fn(&mut Agent);
-type DecisionMakingData = Vec<f64>;
-type ReputationMatrix = Vec<Vec<f64>>;
+fn pass_action(_agent: &mut Agent) {}
 
-#[derive(Clone, Debug)]
-struct Agent {
-    resources: Resources,
-    actions: Vec<Action>,
-    _id: AgentID,
+fn mint_action(agent: &mut Agent) {
+    *agent.resources.entry(AnyResource::Coins).or_insert(0) += 10;
 }
 
-impl Agent {
-    fn new(initial_resources: Resources, actions: Vec<Action>, _id: AgentID) -> Agent {
-        let mut zeroed_resources = Resource::iter().map(|r| (r, 0)).collect::<Resources>();
-        for (resource, amount) in initial_resources {
-            zeroed_resources.insert(resource, amount);
-        }
-        Agent {resources: zeroed_resources, actions, _id}
-    }
-}
-
-trait Decider {
-    fn decide(&self, actions: Vec<Action>, data: DecisionMakingData, rng: &mut StdRng) -> Action;
+fn work_action(agent: &mut Agent) {
+    *agent.resources.entry(AnyResource::Coins).or_insert(0) += 1;
 }
 
 struct WeightedRngDecider;
-impl Decider for WeightedRngDecider {
+impl ActionDecider for WeightedRngDecider {
     fn decide(&self, actions: Vec<Action>, data: DecisionMakingData, rng: &mut StdRng) -> Action {
         let weighted_distribution = WeightedIndex::new(&data).unwrap();
         let chosen_index = weighted_distribution.sample(rng);
@@ -67,39 +55,25 @@ impl Decider for WeightedRngDecider {
     }
 }
 
-fn pass_action(_agent: &mut Agent) {}
-
-fn mint_action(agent: &mut Agent) {
-    *agent.resources.entry(Resource::Coins).or_insert(0) += 10;
-}
-
-fn work_action(agent: &mut Agent) {
-    *agent.resources.entry(Resource::Coins).or_insert(0) += 1;
-}
-
-trait Transformer {
-    fn transform(&self, actions: &mut Vec<Action>) -> ();
-}
-
 struct TrivialTransformer;
-impl Transformer for TrivialTransformer  {
+impl ActionTransformer for TrivialTransformer  {
     fn transform(&self, _actions: &mut Vec<Action>) {}
 }
 
 struct AddMintTransformer;
-impl Transformer for AddMintTransformer {
+impl ActionTransformer for AddMintTransformer {
     fn transform(&self, actions: &mut Vec<Action>) {
         actions.push(mint_action)
     }
 }
 struct AddWorkTransformer;
-impl Transformer for AddWorkTransformer {
+impl ActionTransformer for AddWorkTransformer {
     fn transform(&self, actions: &mut Vec<Action>) {
         actions.push(work_action)
     }
 }
 
-enum AnyTransformer {
+pub enum AnyTransformer {
     AddMintTransformer,
     AddWorkTransformer,
     _TrivialTransformer,
@@ -115,13 +89,8 @@ impl AnyTransformer {
     }
 }
 
-trait Provider {
-    fn provide_game(&self) -> Game;
-    fn cheak_if_roles_are_filled(&self, role_transformers: &BTreeMap<AnyRole, AnyTransformer>) -> (); 
-}
-
 struct KingdomGameProvider;
-impl Provider for KingdomGameProvider {
+impl GameProvider for KingdomGameProvider {
     fn provide_game(&self) -> Game {
         let mut role_transformers = BTreeMap::new();
         role_transformers.insert(AnyRole::KingdomRole(KingdomRole::King), AnyTransformer::AddMintTransformer);
@@ -129,25 +98,22 @@ impl Provider for KingdomGameProvider {
         role_transformers.insert(AnyRole::KingdomRole(KingdomRole::Peasant2), AnyTransformer::AddWorkTransformer);
 
         // Runtime check if all role variants are included:
-        self.cheak_if_roles_are_filled(&role_transformers);
+        self.check_if_roles_are_filled(&role_transformers);
         Game { role_transformers }
     }
 
-    fn cheak_if_roles_are_filled(&self, role_transformers: &BTreeMap<AnyRole, AnyTransformer>) -> () {
+    fn check_if_roles_are_filled(&self, role_transformers: &BTreeMap<AnyRole, AnyTransformer>) -> () {
         for role in KingdomRole::iter() { 
             if !role_transformers.contains_key(&AnyRole::KingdomRole(role.clone())) {
                 panic!("No transformer for role: {:?}", &role);
             }
-        }
+        } 
     }
 }
 
-trait Assigner {
-    fn assign_agents(&self, game: &Game, available_agents: &mut Vec<Agent>) -> Option<BTreeMap<AnyRole, AgentID>>;
-}
 
 struct FirstPossibleIndicesAssigner;
-impl Assigner for FirstPossibleIndicesAssigner {
+impl AgentAssigner for FirstPossibleIndicesAssigner {
     fn assign_agents(&self, game: &Game, available_agents: &mut Vec<Agent>) -> Option<BTreeMap<AnyRole, AgentID>> {
         // println!("Availiable agents before assignment: {:?}", &available_agents.iter().map(|agent| agent._id).collect::<Vec<usize>>());
         let mut assigned_agents: BTreeMap<AnyRole, AgentID> = BTreeMap::new();
@@ -166,10 +132,6 @@ impl Assigner for FirstPossibleIndicesAssigner {
             Some(assigned_agents)
         }
     }
-}
-
-struct Game  {
-    role_transformers: BTreeMap<AnyRole, AnyTransformer>,
 }
 
 impl Game {
@@ -198,32 +160,14 @@ impl Game {
 
 }
 
-
-struct Tile {
-    agents: Vec<Agent>,
-    _resources: Resources,
-    _reputations: ReputationMatrix,
-}
-
-impl Tile {
-    fn new(agents: Vec<Agent>, resources: Resources, reputations: Vec<Vec<f64>>) -> Tile {
-        let mut zeroed_resources = Resource::iter().map(|r| (r, 0)).collect::<Resources>();
-        for (resource, amount) in resources {
-            zeroed_resources.insert(resource, amount);
-        }
-        
-        Tile{agents, _resources: zeroed_resources, _reputations: reputations}
-    }
-}
-
 ///
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
-enum AnyRole {
+pub enum AnyRole {
     KingdomRole(KingdomRole),
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, EnumIter, Debug)]
-enum KingdomRole {
+pub enum KingdomRole {
     King,
     Peasant1,
     Peasant2,
@@ -235,48 +179,63 @@ fn generate_normalized_vector(rng: &mut StdRng, n: usize) -> Vec<f64> {
     vec.into_iter().map(|x| x / sum).collect()
 }
 
-fn log_resources (agents: &Vec<Agent>, log: &mut String) {
-    log.push_str("Agent IDs and final resources:\n");
-    for agent in agents.iter() {
-        log.push_str(&format!("{:2}  {:?}\n", agent._id, &agent.resources));
+struct TrivialInitializer;
+impl AgentInitializer for TrivialInitializer {
+    fn initialize_agents(&self, params: Params) -> Vec<Agent> {
+        let mut agents = vec![];
+        for i in 0..params.num_of_agents {
+            agents.push(
+                Agent::new(
+                BTreeMap::new(),
+                [pass_action as Action; 1].to_vec(), // Do nothing action
+                i as AgentID,
+                )
+            )
+        }
+        agents
     }
-    log.push_str("\n");
+}
+
+
+
+struct TrivialPoolProvider;
+impl GamePoolProvider for TrivialPoolProvider {
+    fn provide_pool(&self, providers: Vec<impl GameProvider>, tick: usize) -> Vec<Game> {
+        let mut game_pool: Vec<Game> = vec![];
+        for provider in providers {
+            game_pool.push(provider.provide_game());
+        }
+        game_pool
+    }
 }
 
 fn main() {
     let timer = Instant::now();
     fs::create_dir_all("output").unwrap();
 
-    let num_of_agents: usize = 6;
     let num_of_ticks: usize = 1000;
     let seed: usize = 2;
 
-    let reputations = vec![vec![1f64; num_of_agents]; num_of_agents];
+    let params = Params {
+        num_of_agents: 6
+    };
+
+    let reputations = vec![vec![1f64; params.num_of_agents]; params.num_of_agents];
     let mut rng = StdRng::seed_from_u64(seed as u64);
     let mut tile = Tile::new(vec![], BTreeMap::new(), reputations);
     
-    for i in 0..num_of_agents {
-        let agent = Agent::new(
-            BTreeMap::new(),
-            [pass_action as Action; 1].to_vec(), // Do nothing action
-            i as AgentID,
-        );
-        tile.agents.push(agent);
-    }
-    
-    for _tick in 0..num_of_ticks {
-        // let mut agents_in_temporal_order = {
-        //     let mut agents = tile.agents.clone();
-        //     agents.shuffle(&mut rng);
-        //     agents
-        // };
+    tile.agents.append(&mut TrivialInitializer.initialize_agents(params));
+
+    for tick in 0..num_of_ticks {
         let mut agents_in_temporal_order = tile.agents.clone();
 
-        let mut games: Vec<Game> = vec![];
-        games.push(KingdomGameProvider.provide_game());
-        games.shuffle(&mut rng);
+        let mut game_pool = TrivialPoolProvider.provide_pool(
+            vec![KingdomGameProvider, KingdomGameProvider],
+            tick);
+            
+        game_pool.shuffle(&mut rng);
 
-        for game in games{
+        for game in game_pool{
             let maybe_assigned_agents = FirstPossibleIndicesAssigner.assign_agents(&game, &mut agents_in_temporal_order);
             if let Some(assigned_agents) = maybe_assigned_agents {
                 game.prepare_and_execute(&assigned_agents, &mut tile.agents, &mut rng)
