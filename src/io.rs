@@ -26,7 +26,7 @@ use std::iter::zip;
 use rand::prelude::SliceRandom;
 // use strum::IntoEnumIterator;
 
-use super::engine::Agent;
+use super::Agent;
 
 pub fn log_resources (agents: &Vec<Agent>, log: &mut String) {    log.push_str("Agent IDs and final resources:\n");
     for agent in agents.iter() {
