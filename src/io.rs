@@ -30,7 +30,7 @@ use super::Agent;
 
 pub fn log_resources (agents: &Vec<Agent>, log: &mut String) {    log.push_str("Agent IDs and final resources:\n");
     for agent in agents.iter() {
-        log.push_str(&format!("{:2}  {:?}\n", agent._id, &agent.resources));
+        log.push_str(&format!("{:2}  {:?}\n", agent.id, &agent.resources));
     }
     log.push_str("\n");
 }

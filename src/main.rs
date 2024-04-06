@@ -26,52 +26,52 @@ use std::iter::zip;
 use rand::prelude::SliceRandom;
 // use strum::IntoEnumIterator;
 
-pub mod io;
-pub mod implementation;
+mod io;
+mod implementation;
 
 use io::*;
-use implementation::{AnyResource, AnyTransformer, AnyRole};
+use implementation::{AnyResource, AnyTransformer, AnyRole, AnyAction, AnyActionIntoInner};
 use implementation::{get_initializer, get_decider, get_pool_provider, get_agent_assigner, get_game_providers};
 
-pub type AgentID = usize;
-pub type Resources = BTreeMap<AnyResource, usize>;
-pub type Action = fn(&mut Agent);
-pub type DecisionMakingData = Vec<f64>;
-pub type ReputationMatrix = Vec<Vec<f64>>;
-
-pub struct Game  {
-    pub role_transformers: BTreeMap<AnyRole, AnyTransformer>,
-}
+type AgentID = usize;
+type Resources = BTreeMap<AnyResource, usize>;
+type Action = fn(&mut Agent);
+type DecisionMakingData = Vec<f64>;
+type ReputationMatrix = Vec<Vec<f64>>;
 
 #[derive(Clone, Debug)]
 pub struct Agent {
-    pub resources: Resources,
-    pub actions: Vec<Action>,
-    pub _id: AgentID,
+    resources: Resources,
+    actions: Vec<AnyAction>,
+    id: AgentID,
+}
+
+pub struct Game  {
+    role_transformers: BTreeMap<AnyRole, AnyTransformer>,
 }
 
 pub struct Params {
-    pub num_of_agents: usize
+    num_of_agents: usize
 }
 
 impl Agent {
-    pub fn new(initial_resources: Resources, actions: Vec<Action>, _id: AgentID) -> Agent {
+    fn new(initial_resources: Resources, actions: Vec<AnyAction>, id: AgentID) -> Agent {
         let mut zeroed_resources = AnyResource::iter().map(|r| (r, 0)).collect::<Resources>();
         for (resource, amount) in initial_resources {
             zeroed_resources.insert(resource, amount);
         }
-        Agent {resources: zeroed_resources, actions, _id}
+        Agent {resources: zeroed_resources, actions, id}
     }
 }
 
-pub struct Tile {
-    pub agents: Vec<Agent>,
-    pub _resources: Resources,
-    pub _reputations: ReputationMatrix,
+struct Tile {
+    agents: Vec<Agent>,
+    _resources: Resources,
+    _reputations: ReputationMatrix,
 }
 
 impl Tile {
-    pub fn new(agents: Vec<Agent>, resources: Resources, reputations: Vec<Vec<f64>>) -> Tile {
+    fn new(agents: Vec<Agent>, resources: Resources, reputations: Vec<Vec<f64>>) -> Tile {
         let mut zeroed_resources = AnyResource::iter().map(|r| (r, 0)).collect::<Resources>();
         for (resource, amount) in resources {
             zeroed_resources.insert(resource, amount);
@@ -83,11 +83,11 @@ impl Tile {
 
 
 pub trait Decider {
-    fn decide(&self, actions: Vec<Action>, data: DecisionMakingData, rng: &mut StdRng) -> Action;
+    fn decide(&self, actions: Vec<AnyAction>, data: DecisionMakingData, rng: &mut StdRng) -> AnyAction;
 }
 
 pub trait Transformer {
-    fn transform(&self, actions: &mut Vec<Action>) -> ();
+    fn transform(&self, actions: &mut Vec<AnyAction>) -> ();
 }
 
 pub trait GameProvider {
@@ -99,7 +99,7 @@ pub trait PoolProvider {
     fn provide_pool(&self, providers: &Vec<impl GameProvider>, tick: usize) -> Vec<Game>;
 }
 pub trait Assigner {
-    fn assign_agents(&self, game: &Game, available_agents: &mut Vec<Agent>) -> Option<BTreeMap<AnyRole, AgentID>>;
+    fn assign_and_consume_agents(&self, game: &Game, available_agents: &mut Vec<Agent>) -> Option<BTreeMap<AnyRole, AgentID>>;
 }
 
 pub trait Initializer {
@@ -108,8 +108,8 @@ pub trait Initializer {
 
 
 impl Game {
-    fn prepare(&self, assigned_roles: &BTreeMap<AnyRole, AgentID>, ordered_agents: &Vec<Agent>) -> BTreeMap<AgentID, Vec<Action>> {
-        let mut transformed_actions_for_actors: BTreeMap<AgentID, Vec<Action>> = BTreeMap::new(); 
+    fn prepare(&self, assigned_roles: &BTreeMap<AnyRole, AgentID>, ordered_agents: &Vec<Agent>) -> BTreeMap<AgentID, Vec<AnyAction>> {
+        let mut transformed_actions_for_actors: BTreeMap<AgentID, Vec<AnyAction>> = BTreeMap::new(); 
         
         for (assigned_role, agent_id) in assigned_roles.iter() {
             if let Some(action_transformer) = self.role_transformers.get(assigned_role) {
@@ -121,13 +121,14 @@ impl Game {
         transformed_actions_for_actors
     }
 
-    fn prepare_and_execute(&self, assigned_roles: &BTreeMap<AnyRole, AgentID>, ordered_agents: &mut Vec<Agent>, rng: &mut StdRng, decider: &impl Decider) -> () {        
-        let new_actions = self.prepare(&assigned_roles, &*ordered_agents); // Agents used in non-mutable represenation
+    fn prepare_and_execute(&self, assigned_roles: &BTreeMap<AnyRole, AgentID>, all_agents: &mut Vec<Agent>, rng: &mut StdRng, decider: &impl Decider) -> () {        
+        let new_actions = self.prepare(&assigned_roles, &*all_agents); // Agents used in non-mutable represenation
 
         for (agent_id, actions) in new_actions {
             let decider_data = generate_normalized_vector(rng, actions.len());
-            let choosen_action = decider.decide(actions, decider_data, rng); 
-            choosen_action(&mut ordered_agents[agent_id]); 
+            let choosen_action = decider.decide(actions, decider_data, rng).into_inner();
+
+            choosen_action(&mut all_agents[agent_id]) 
         } 
     }
 
@@ -144,10 +145,10 @@ fn main() {
     fs::create_dir_all("output").unwrap();
 
     let num_of_ticks: usize = 1000;
-    let seed: usize = 2;
+    let seed: usize = 5;
 
     let params = Params {
-        num_of_agents: 6
+        num_of_agents: 10
     };
 
     let decider = get_decider();
@@ -162,15 +163,13 @@ fn main() {
     tile.agents.append(&mut get_initializer().initialize_agents(params));
 
     for tick in 0..num_of_ticks {
-        let mut agents_in_temporal_order = tile.agents.clone();
-
-        let mut game_pool = pool_provider.provide_pool(
-            &game_providers,
-            tick);
+        let mut transient_consumable_agents = tile.agents.clone();
+        // transient_consumable_agents.shuffle(& mut rng);
+        let mut game_pool = pool_provider.provide_pool(&game_providers, tick);
         game_pool.shuffle(&mut rng);
 
         for game in game_pool{
-            let maybe_assigned_agents = assigner.assign_agents(&game, &mut agents_in_temporal_order);
+            let maybe_assigned_agents = assigner.assign_and_consume_agents(&game, &mut transient_consumable_agents);
             if let Some(assigned_agents) = maybe_assigned_agents {
                 game.prepare_and_execute(&assigned_agents, &mut tile.agents, &mut rng, &decider)
             }
@@ -178,7 +177,7 @@ fn main() {
 
        let mut summary_log = String::new();
        log_resources(&tile.agents, &mut summary_log);
-       let log_file_pathname = format!("output/{}.txt", "Test");
+       let log_file_pathname = format!("output/{}.txt", "resources");
        write(&log_file_pathname, summary_log).unwrap();
     }
 
