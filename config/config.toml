@@ -1,11 +1,7 @@
-[[Hyperparameters]]
+[[Configs]]
 
-game_seed_values = [2]
-probability_resolution_values = [25]
-minting_difficulty_growth_rate_values = [1.000025]
-
-[[Settings]]
-
+plot_graph = false
 plotting_frame_subselection_factor = 50
-full_game_logs = false
-tick_count = 501
+tick_count = 100
+agent_count = 10
+seed = 1

@@ -28,22 +28,49 @@ use rand::prelude::SliceRandom;
 
 use super::*;
 
-fn pass_action(_agent: &mut Agent) {} // see Action type
+fn pass_action(_agent: &mut Agent) {} // Action that does nothing
 
-fn mint_action(agent: &mut Agent) { // see Action type
+fn mint_action(agent: &mut Agent) { 
     *agent.resources.entry(AnyResource::Coins).or_insert(0) += 10;
 }
 
-fn work_action(agent: &mut Agent) { // see Action type
+fn work_action(agent: &mut Agent) { 
     *agent.resources.entry(AnyResource::Coins).or_insert(0) += 1;
+}
+
+impl AnyActionIntoInner for AnyAction {
+    fn into_inner(self) -> Action {
+        match self {
+            AnyAction::pass_action => pass_action,
+            AnyAction::mint_action => mint_action,
+            AnyAction::work_action => work_action,
+        }
+    }
+}
+
+fn generate_normalized_vector(rng: &mut StdRng, n: usize) -> Vec<f64> {
+    let vec: Vec<f64> = rng.sample_iter(Uniform::new(0.0, 1.0)).take(n).collect();
+    let sum: f64 = vec.iter().sum();
+    vec.into_iter().map(|x| x / sum).collect()
 }
 
 struct WeightedRngDecider;
 impl Decider for WeightedRngDecider {
-    fn decide(&self, actors_actions: Vec<AnyAction>, data: DecisionMakingData, rng: &mut StdRng) -> AnyAction {
-        let weighted_distribution = WeightedIndex::new(&data).unwrap();
+    fn decide(&self, actors_actions: Vec<AnyAction>, _data: &AvailableData, rng: &mut StdRng) -> AnyAction {
+        let normalized_vector = generate_normalized_vector(rng, actors_actions.len());
+        let weighted_distribution = WeightedIndex::new(normalized_vector).unwrap();
         let chosen_index = weighted_distribution.sample(rng);
         actors_actions[chosen_index].clone()
+    }
+}
+
+impl Decider for AnyDecider {
+    fn decide(&self, actors_actions: Vec<AnyAction>, data: &AvailableData, rng: &mut StdRng) -> AnyAction {
+        match self {
+            AnyDecider::WeightedRngDecider => {
+                WeightedRngDecider.decide(actors_actions, data, rng)
+            }
+        }
     }
 }
 
@@ -111,18 +138,21 @@ impl Assigner for FirstPossibleIndicesAssigner {
 
 struct TrivialInitializer;
 impl Initializer for TrivialInitializer {
-    fn initialize_agents(&self, params: Params) -> Vec<Agent> {
+    fn initialize_agents(&self, configs: &Configs) -> (Vec<Agent>, BTreeMap<AgentID, AnyDecider>) {
         let mut agents = vec![];
-        for i in 0..params.num_of_agents {
+        let mut deciders: BTreeMap<AgentID, AnyDecider> = BTreeMap::new();
+
+        for i in 0..configs.agent_count {
             agents.push(
                 Agent::new(
                     BTreeMap::new(),
-                vec![AnyAction::pass_action], // Do nothing action
+                vec![AnyAction::pass_action],
                 i as AgentID,
                 )
-            )
+            );
+            deciders.insert(i as AgentID, AnyDecider::WeightedRngDecider);
         }
-        agents
+        (agents, deciders)
     }
 }
 
@@ -137,16 +167,6 @@ impl PoolProvider for TrivialPoolProvider {
     }    
 }    
 
-
-impl AnyActionIntoInner for AnyAction {
-    fn into_inner(self) -> Action {
-        match self {
-            AnyAction::pass_action => pass_action,
-            AnyAction::mint_action => mint_action,
-            AnyAction::work_action => work_action,
-        }
-    }
-}
 
 /// Public interface
 /// Use get_* functions to pass trait-implementing-structs to the main fn.
@@ -169,10 +189,9 @@ pub enum AnyAction {
     work_action,
 }    
 
-pub trait AnyActionIntoInner {
-    fn into_inner(self) -> Action;
-}    
-
+pub enum AnyDecider {
+    WeightedRngDecider
+}
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, EnumIter, Debug)]
 pub enum KingdomRole {
@@ -201,10 +220,6 @@ pub fn get_initializer() -> impl Initializer {
     TrivialInitializer
 }
 
-pub fn get_decider() -> impl Decider {
-    WeightedRngDecider
-}
-
 pub fn get_agent_assigner() -> impl Assigner {
     FirstPossibleIndicesAssigner
 }
@@ -216,3 +231,4 @@ pub fn get_pool_provider() -> impl PoolProvider {
 pub fn get_game_providers() -> Vec<impl GameProvider> {
     vec![KingdomGameProvider, KingdomGameProvider]
 }
+
