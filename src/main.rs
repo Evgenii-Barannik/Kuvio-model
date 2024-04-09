@@ -157,7 +157,11 @@ fn main() {
     let (mut agents, deciders) = get_initializer().initialize_agents(&configs);
     tile.agents.append(&mut agents);
     drop(agents);
-
+    
+    let log_file_pathname = format!("output/{}.txt", "resources");
+    let plot_file_pathname = format!("output/{}.gif", "resources");
+    let mut root = BitMapBackend::gif(plot_file_pathname, (640, 480), 100).unwrap().into_drawing_area();
+    
     for tick in 0..configs.tick_count {
         let mut transient_consumable_agents = tile.agents.clone();
         // transient_consumable_agents.shuffle(& mut rng);
@@ -169,16 +173,19 @@ fn main() {
             if let Some(assigned_agents) = maybe_assigned_agents {
                 game.prepare_and_execute(&assigned_agents, &mut tile.agents, &mut rng, &deciders)
             }
-       }
 
+        }
+        if (tick % configs.plotting_frame_subselection_factor) == 0 {
+            println!("Plotting frame for tick {}", tick);
+            plot_resource_distribution(&tile.agents, &mut root, tick);
+        }
+    }
        let mut summary_log = String::new();
        summary_log.push_str(&format!("{:#?}\n\n", configs));
        log_resources(&tile.agents, &mut summary_log);
        log_reputations(&tile._reputations, &mut summary_log);
 
-       let log_file_pathname = format!("output/{}.txt", "resources");
        write(&log_file_pathname, summary_log).unwrap();
-    }
 
     println!("Execution time: {:.3} s", timer.elapsed().as_secs_f64());
 }
