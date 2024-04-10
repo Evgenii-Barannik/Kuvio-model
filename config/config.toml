@@ -3,5 +3,5 @@
 plot_graph = false
 plotting_frame_subselection_factor = 5
 tick_count = 200
-agent_count = 10
+agent_count = 15
 seed = 1

@@ -148,11 +148,7 @@ pub fn plot_resource_distribution(
     let mut buckets = vec![0u32; bucket_count];
     let colormap = VulcanoHSL {};
     
-    let (legend_x, legend_y) = (550, 50);
-    let legend_size = 8;
-    let text_gap = 5;
     let text_size = 15;
-
     let tick_info = &format!("Tick: {}", tick_number);
 
     for (agent_id, log_resource) in log_resources.iter().enumerate() {
@@ -164,36 +160,36 @@ pub fn plot_resource_distribution(
         let bar_right = bar_left + bucket_width;
         let bar_bottom = buckets[bucket_index];
         let bar_top = bar_bottom + 1;
-
-        chart.draw_series(std::iter::once(Rectangle::new(
-            [(bar_left, bar_bottom), (bar_right, bar_top)],
-            color.filled(),
-        ))).unwrap();
         
+        chart.draw_series(std::iter::once(
+            Rectangle::new(
+            [(bar_left, bar_bottom), (bar_right, bar_top)],
+            color.filled())
+        )
+        ).unwrap();
+
+        let padded_id = format!("{:<3}", agent_id);
+        chart.draw_series(std::iter::once(
+            EmptyElement::at(((bar_left+bar_right)/2.0, bar_top)) 
+            + Text::new(padded_id[0..1].to_string(), (-3, 0), ("sans-serif", text_size-2).into_font())
+            + Text::new(padded_id[1..2].to_string(), (-3, 10), ("sans-serif", text_size-2).into_font())
+            + Text::new(padded_id[2..3].to_string(), (-3, 20), ("sans-serif", text_size-2).into_font())
+        )).unwrap();
+
         buckets[bucket_index]+= 1;
         
-        // Legend plotting
-        let y_position = legend_y + agent_id as i32 * (legend_size + text_gap + text_size);
-        if agent_id <= 10 {
-            root.draw(&Rectangle::new(
-                [(legend_x, y_position), (legend_x + legend_size, y_position + legend_size)],
-                color.filled(),
-            )).unwrap();
-            
-            let agent_label = format!("Agent {}", agent_id);
-            root.draw(&Text::new(
-                agent_label,
-                (legend_x + legend_size + text_gap, y_position + (legend_size / 2) - 7),
-                ("sans-serif", text_size).into_font(),
-            )).unwrap();
-        }
     }
     root.draw(&Text::new(
-        tick_info.as_str(),
-        (legend_x + legend_size, 20),
+        "The numbers in rectangles are Agent IDs, written from top to bottom.",
+        (160, 50),
         ("sans-serif", text_size).into_font(),
     )).unwrap();
-    
+
+    root.draw(&Text::new(
+        tick_info.as_str(),
+        (550, 20),
+        ("sans-serif", text_size).into_font(),
+    )).unwrap();
 
     root.present().unwrap();
 }

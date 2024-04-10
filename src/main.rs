@@ -164,7 +164,7 @@ fn main() {
     
     for tick in 0..configs.tick_count {
         let mut transient_consumable_agents = tile.agents.clone();
-        // transient_consumable_agents.shuffle(& mut rng);
+        transient_consumable_agents.shuffle(& mut rng);
         let mut game_pool = pool_provider.provide_pool(&game_providers, tick);
         game_pool.shuffle(&mut rng);
 
