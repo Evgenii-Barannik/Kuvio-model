@@ -56,16 +56,17 @@ fn generate_normalized_vector(rng: &mut StdRng, n: usize) -> Vec<f64> {
 
 struct WeightedRngDecider;
 impl Decider for WeightedRngDecider {
-    fn decide(&self, actors_actions: Vec<AnyAction>, _data: &AvailableData, rng: &mut StdRng) -> AnyAction {
-        let normalized_vector = generate_normalized_vector(rng, actors_actions.len());
-        let weighted_distribution = WeightedIndex::new(normalized_vector).unwrap();
+    fn decide(&self, actors_actions: Vec<AnyAction>, _data: &DecisionAvailableData, rng: &mut StdRng) -> AnyAction {
+        // Rng usage here is superfluous, it is for demonstration.
+        let random_normalized_vector = generate_normalized_vector(rng, actors_actions.len()); 
+        let weighted_distribution = WeightedIndex::new(random_normalized_vector).unwrap();
         let chosen_index = weighted_distribution.sample(rng);
         actors_actions[chosen_index].clone()
     }
 }
 
 impl Decider for AnyDecider {
-    fn decide(&self, actors_actions: Vec<AnyAction>, data: &AvailableData, rng: &mut StdRng) -> AnyAction {
+    fn decide(&self, actors_actions: Vec<AnyAction>, data: &DecisionAvailableData, rng: &mut StdRng) -> AnyAction {
         match self {
             AnyDecider::WeightedRngDecider => {
                 WeightedRngDecider.decide(actors_actions, data, rng)
@@ -96,63 +97,148 @@ impl Transformer for AddWorkTransformer {
 struct KingdomGameProvider;
 impl GameProvider for KingdomGameProvider {
     fn provide_game(&self) -> Game {
-        let mut role_transformers = BTreeMap::new();
-        role_transformers.insert(AnyRole::KingdomRole(KingdomRole::King), AnyTransformer::AddMintTransformer);
-        role_transformers.insert(AnyRole::KingdomRole(KingdomRole::Peasant1), AnyTransformer::AddWorkTransformer);
-        role_transformers.insert(AnyRole::KingdomRole(KingdomRole::Peasant2), AnyTransformer::AddWorkTransformer);
+        let mut roles = BTreeMap::new();
+
+        roles.insert(
+            AnyRole::KingdomRole(KingdomRole::King), 
+            RoleDescription {
+                uniqueness: AnyUniqueness::RequiredMultipletRole(1usize, 2usize), // Contains min required and max possible multiplicity 
+                transformer: AnyTransformer::AddMintTransformer,
+            }
+        );
+
+        roles.insert(
+            AnyRole::KingdomRole(KingdomRole::Peasant), 
+            RoleDescription {
+                uniqueness: AnyUniqueness::OptionalMultipletRole(0usize, usize::MAX), // Contains min required and max possible multiplicity
+                transformer: AnyTransformer::AddWorkTransformer,
+            }
+        );
         
-        // Runtime check if all role variants are included:
-        self.check_if_roles_are_filled(&role_transformers);
-        Game { role_transformers }
+        self.check_if_all_roles_are_described(&roles);
+        Game { roles }
     }
 
-    fn check_if_roles_are_filled(&self, role_transformers: &BTreeMap<AnyRole, AnyTransformer>) -> () {
+    fn check_if_all_roles_are_described(&self, roles: &BTreeMap<AnyRole, RoleDescription>) -> () {
         for role in KingdomRole::iter() { 
-            if !role_transformers.contains_key(&AnyRole::KingdomRole(role.clone())) {
-                panic!("No transformer for role: {:?}", &role);
+            if !roles.contains_key(&AnyRole::KingdomRole(role.clone())) {
+                panic!("No description (uniqueness and transformer) for this role: {:?}", &role);
             }
         } 
     }
 }
 
+struct TrivialParticipationChecker;
+impl ParticipationChecker for TrivialParticipationChecker {
+    fn check_if_agent_participates(&self, _agent: &Agent, _game: &Game, _proposed_role: &AnyRole) -> bool {
+        true
+    }
+} 
 
-struct FirstPossibleIndicesAssigner;
-impl Assigner for FirstPossibleIndicesAssigner {
-    fn assign_and_consume_agents(&self, game: &Game, available_agents: &mut Vec<Agent>) -> Option<BTreeMap<AnyRole, AgentID>> {
-        let mut assigned_agents: BTreeMap<AnyRole, AgentID> = BTreeMap::new();
-        let mut agent_ids_to_consume: Vec<AgentID> = vec![];
-        
-        for (role, agent) in game.role_transformers.keys().zip(&*available_agents) {
-            assigned_agents.insert(role.to_owned(), agent.id);
-            agent_ids_to_consume.push(agent.id);
+impl ParticipationChecker for AnyParticipationChecker {
+    fn check_if_agent_participates(&self, agent: &Agent, game: &Game, _proposed_role: &AnyRole) -> bool {
+        match self {
+            &AnyParticipationChecker::TrivialParticipationChecker => {
+                TrivialParticipationChecker.check_if_agent_participates(agent, game, _proposed_role)
+            }
         }
+    }
+}
+
+struct FirstAvailableAgentsAssigner;
+impl Assigner for FirstAvailableAgentsAssigner {
+    fn assign_and_consume_agents(&self, game: &Game, available_agents: &mut Vec<Agent>) -> Option<BTreeMap<AgentID, AnyRole>> {
+        let mut assigned_agents: BTreeMap<AgentID, AnyRole> = BTreeMap::new();
         
-        if assigned_agents.len() != game.role_transformers.len() {
-            return None; 
-        } else {
-            available_agents.retain(|agent| !agent_ids_to_consume.contains(&agent.id));
-            Some(assigned_agents)
-        }
+        // Required roles assignments
+        let required_roles = game.roles.clone().into_iter()
+        .filter_map(|(k, v)| {
+            if let AnyUniqueness::RequiredMultipletRole(min_multiplicity, max_multiplicity) = v.uniqueness {
+                Some((k as AnyRole, min_multiplicity, max_multiplicity))
+            } else { None }
+        })
+        .collect::<Vec<(AnyRole, usize, usize)>>();
+    
+    for (role, min_multiplicity, max_multiplicity) in required_roles.iter() {
+        assert!(*max_multiplicity > 0usize); // TODO: Move to the init phase?
+        assert!(max_multiplicity >= min_multiplicity); // TODO: Move to the init phase?
+        let mut multiplicity_remaining = max_multiplicity.clone();
+        let mut agents_to_consume: Vec<AgentID> = vec![];
+        let mut suggested_agents: BTreeMap<AgentID, AnyRole> = BTreeMap::new();
+
+            'agent_loop: for agent in available_agents.iter() {
+                if agent.participation_checker.check_if_agent_participates(agent, game, role) {
+                    suggested_agents.insert(agent.id, role.to_owned());
+                    agents_to_consume.push(agent.id);
+
+                    multiplicity_remaining -= 1;
+                    if multiplicity_remaining == 0 {
+                        break 'agent_loop
+                    }
+                }
+            }
+            if agents_to_consume.len() >= *min_multiplicity {
+                available_agents.retain(|agent| !agents_to_consume.contains(&agent.id));
+                assigned_agents.append(&mut suggested_agents);
+            } else {
+                return None; // Assignment to one required role failed, so the game will not be played.
+            };
+        } 
+        
+        // Optional roles assignments
+        let optional_roles = game.roles.clone().into_iter()
+        .filter_map(|(k, v)| {
+            if let AnyUniqueness::OptionalMultipletRole(min_multiplicity, max_multiplicity) = v.uniqueness {
+                Some((k as AnyRole, min_multiplicity, max_multiplicity))
+            } else { None }
+        })
+        .collect::<Vec<(AnyRole, usize, usize)>>();
+    
+    for (role, min_multiplicity, max_multiplicity) in optional_roles.iter() {
+        assert!(*max_multiplicity > 0usize); // TODO: Move to the init phase?
+        assert!(max_multiplicity >= min_multiplicity); // TODO: Move to the init phase?
+        let mut multiplicity_remaining = max_multiplicity.clone();
+        let mut agents_to_consume: Vec<AgentID> = vec![];
+        let mut suggested_agents: BTreeMap<AgentID, AnyRole> = BTreeMap::new();
+
+            'agent_loop: for agent in available_agents.iter() {
+                if agent.participation_checker.check_if_agent_participates(agent, game, role) {
+                    suggested_agents.insert(agent.id, role.to_owned());
+                    agents_to_consume.push(agent.id);
+
+                    multiplicity_remaining -= 1;
+                    if multiplicity_remaining == 0 {
+                        break 'agent_loop
+                    }
+                }
+            }
+            if agents_to_consume.len() >= *min_multiplicity {
+                available_agents.retain(|agent| !agents_to_consume.contains(&agent.id));
+                assigned_agents.append(&mut suggested_agents);
+            }
+        } 
+        Some(assigned_agents)
+
     }
 }
 
 struct TrivialInitializer;
 impl Initializer for TrivialInitializer {
-    fn initialize_agents(&self, configs: &Configs) -> (Vec<Agent>, BTreeMap<AgentID, AnyDecider>) {
+    fn initialize_agents(&self, configs: &Configs) -> Vec<Agent> {
         let mut agents = vec![];
-        let mut deciders: BTreeMap<AgentID, AnyDecider> = BTreeMap::new();
 
         for i in 0..configs.agent_count {
             agents.push(
                 Agent::new(
-                    BTreeMap::new(),
+                BTreeMap::new(),
                 vec![AnyAction::pass_action],
+                AnyDecider::WeightedRngDecider,
+                AnyParticipationChecker::TrivialParticipationChecker,
                 i as AgentID,
                 )
             );
-            deciders.insert(i as AgentID, AnyDecider::WeightedRngDecider);
         }
-        (agents, deciders)
+        agents
     }
 }
 
@@ -167,7 +253,6 @@ impl PoolProvider for TrivialPoolProvider {
     }    
 }    
 
-
 /// Public interface
 /// Use get_* functions to pass trait-implementing-structs to the main fn.
 
@@ -176,30 +261,25 @@ pub enum AnyResource {
     Coins,
 }    
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
-pub enum AnyRole { 
-    KingdomRole(KingdomRole),
-}    
-
 #[allow(non_camel_case_types)]
 #[derive(Clone, Debug)]
-pub enum AnyAction {
+pub enum AnyAction { 
     pass_action,
     mint_action,
     work_action,
 }    
 
+#[derive(Clone, Debug)]
 pub enum AnyDecider {
     WeightedRngDecider
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, EnumIter, Debug)]
-pub enum KingdomRole {
-    King,
-    Peasant1,
-    Peasant2,
+#[derive(Clone, Debug)]
+pub enum AnyParticipationChecker {
+    TrivialParticipationChecker
 }
-    
+
+#[derive(Clone)]
 pub enum AnyTransformer { 
     AddMintTransformer,
     AddWorkTransformer,
@@ -221,7 +301,7 @@ pub fn get_initializer() -> impl Initializer {
 }
 
 pub fn get_agent_assigner() -> impl Assigner {
-    FirstPossibleIndicesAssigner
+    FirstAvailableAgentsAssigner
 }
 
 pub fn get_pool_provider() -> impl PoolProvider {
@@ -229,6 +309,16 @@ pub fn get_pool_provider() -> impl PoolProvider {
 }
 
 pub fn get_game_providers() -> Vec<impl GameProvider> {
-    vec![KingdomGameProvider, KingdomGameProvider]
+    vec![KingdomGameProvider]
 }
 
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
+pub enum AnyRole { 
+    KingdomRole(KingdomRole),
+}    
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, EnumIter, Debug)]
+pub enum KingdomRole {
+    King,
+    Peasant,
+}

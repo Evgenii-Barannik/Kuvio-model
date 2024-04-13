@@ -180,9 +180,9 @@ pub fn plot_resource_distribution(
         
     }
     root.draw(&Text::new(
-        "The numbers in rectangles are Agent IDs, written from top to bottom.",
+        "Numbers in rectangles are Agent IDs, written from top to bottom.",
         (160, 50),
-        ("sans-serif", text_size).into_font(),
+        ("sans-serif", text_size + 5).into_font(),
     )).unwrap();
 
     root.draw(&Text::new(
