@@ -1,7 +1,7 @@
 [[Configs]]
 
-plot_graph = false
-plotting_frame_subselection_factor = 5
-tick_count = 100
+plot_graph = true
+plotting_frame_subselection_factor = 10
+tick_count = 400
 agent_count = 12
 seed = 1

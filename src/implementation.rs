@@ -54,26 +54,48 @@ fn generate_normalized_vector(rng: &mut StdRng, n: usize) -> Vec<f64> {
     vec.into_iter().map(|x| x / sum).collect()
 }
 
-struct WeightedRngDecider;
-impl Decider for WeightedRngDecider {
-    fn decide(&self, actors_actions: Vec<AnyAction>, _data: &DecisionAvailableData, rng: &mut StdRng) -> AnyAction {
-        // Rng usage here is superfluous, it is for demonstration.
-        let random_normalized_vector = generate_normalized_vector(rng, actors_actions.len()); 
-        let weighted_distribution = WeightedIndex::new(random_normalized_vector).unwrap();
-        let chosen_index = weighted_distribution.sample(rng);
-        actors_actions[chosen_index].clone()
+struct RngDecider;
+impl Decider for RngDecider {
+    fn decide(&self, _agent: &Agent, transient_actions: Vec<AnyAction>, _data: &DecisionAvailableData, rng: &mut StdRng) -> AnyAction {
+        let random_index = Uniform::new(0, transient_actions.len()).sample(rng);
+        transient_actions[random_index].clone()
     }
+}
+struct UtilityComputingDecider;
+impl Decider for UtilityComputingDecider {
+    fn decide(&self, agent: &Agent, transient_actions: Vec<AnyAction>, _data: &DecisionAvailableData, _rng: &mut StdRng) -> AnyAction {
+        let assesed_utilities = transient_actions.iter()
+            .map(|action| (*action).clone().into_inner())
+            .map(|f| { 
+                let mut agent = agent.clone();
+                f(&mut agent);
+                agent.get_utility()
+            } )
+            .collect::<Vec<f64>>();
+            
+        let choosen_index = assesed_utilities.iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Less))
+            .map(|(index, _)| index)
+            .unwrap();
+
+        transient_actions[choosen_index].clone()
+    }   
 }
 
 impl Decider for AnyDecider {
-    fn decide(&self, actors_actions: Vec<AnyAction>, data: &DecisionAvailableData, rng: &mut StdRng) -> AnyAction {
+    fn decide(&self, agent: &Agent, transient_actions: Vec<AnyAction>, data: &DecisionAvailableData, rng: &mut StdRng) -> AnyAction {
         match self {
-            AnyDecider::WeightedRngDecider => {
-                WeightedRngDecider.decide(actors_actions, data, rng)
+            AnyDecider::RngDecider => {
+                RngDecider.decide(agent, transient_actions, data, rng)
+            }
+            AnyDecider::UtilityComputingDecider => {
+                UtilityComputingDecider.decide(agent, transient_actions, data, rng)
             }
         }
     }
 }
+
 
 struct TrivialTransformer;
 impl Transformer for TrivialTransformer  {
@@ -227,18 +249,27 @@ impl Initializer for TrivialInitializer {
     fn initialize_agents(&self, configs: &Configs) -> Vec<Agent> {
         let mut agents = vec![];
 
+        let mid_index = configs.agent_count.div_ceil(2);
         for i in 0..configs.agent_count {
+            let decider = if i < mid_index {
+                AnyDecider::RngDecider
+            } else {
+                AnyDecider::UtilityComputingDecider
+            };
+
             agents.push(
                 Agent::new(
-                BTreeMap::new(),
-                vec![AnyAction::pass_action],
-                AnyDecider::WeightedRngDecider,
-                AnyParticipationChecker::TrivialParticipationChecker,
-                i as AgentID,
+                    BTreeMap::new(),
+                    vec![AnyAction::pass_action],
+                    decider,
+                    AnyParticipationChecker::TrivialParticipationChecker,
+                    i as AgentID,
                 )
             );
         }
+
         agents
+
     }
 }
 
@@ -271,7 +302,8 @@ pub enum AnyAction {
 
 #[derive(Clone, Debug)]
 pub enum AnyDecider {
-    WeightedRngDecider
+    RngDecider,
+    UtilityComputingDecider 
 }
 
 #[derive(Clone, Debug)]

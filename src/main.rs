@@ -73,6 +73,19 @@ impl Agent {
         }
         Agent {resources: zeroed_resources, base_actions, decider, participation_checker, id}
     }
+
+    fn get_utility(&self) -> f64 {
+        let mut total_utility = 0.0;
+        for (_resource, &amount) in &self.resources {
+            if amount > 0 {
+                total_utility += f64::ln(amount as f64) + 1.0;
+                    // We add constant to the {log of resource amount} because without it resource change from 0 to 1 will not change utility.
+                    // This is so because ln(1.0) == 0.0.
+            }
+        }
+        total_utility
+    }
+    
 }
 
 struct Tile {
@@ -94,11 +107,11 @@ impl Tile {
 
 
 pub trait Decider {
-    fn decide(&self, actions: Vec<AnyAction>, data: &DecisionAvailableData, rng: &mut StdRng) -> AnyAction;
+    fn decide(&self, agent: &Agent, transient_actions: Vec<AnyAction>, data: &DecisionAvailableData, rng: &mut StdRng) -> AnyAction;
 }
 
 pub trait Transformer {
-    fn transform(&self, actions: &mut Vec<AnyAction>) -> (); //Procedure
+    fn transform(&self, base_actions: &mut Vec<AnyAction>) -> (); //Procedure
 }
 
 pub trait GameProvider {
@@ -140,8 +153,8 @@ impl Game {
     }
 
     fn prepare_and_execute_actions(&self, assigned_roles: &BTreeMap<AgentID, AnyRole>, ordered_agents: &mut Vec<Agent>, rng: &mut StdRng) -> () {
-        let new_actions = self.prepare_actions(&assigned_roles, &*ordered_agents); // Agents in non-mutable represenation
-        for (agent_id, actions) in new_actions {
+        let transient_actions = self.prepare_actions(&assigned_roles, &*ordered_agents); // Agents in non-mutable represenation
+        for (agent_id, actions) in transient_actions {
             let choosen_decider = &ordered_agents[agent_id].decider;
 
             let availiable_data: BTreeMap<AgentID, Resources> = ordered_agents
@@ -149,13 +162,14 @@ impl Game {
                 .map(|agent| (agent.id, agent.resources.clone()))
                 .collect();
 
-            let choosen_action = choosen_decider.decide(actions, &availiable_data, rng).into_inner(); 
+            let choosen_action = choosen_decider.decide(&ordered_agents[agent_id], actions, &availiable_data, rng).into_inner(); 
 
             choosen_action(&mut ordered_agents[agent_id]) 
         } 
     }
 
 }
+
 
 fn main() {
     let timer = Instant::now();
@@ -173,7 +187,7 @@ fn main() {
     let mut agents = get_initializer().initialize_agents(&configs);
     tile.agents.append(&mut agents);
     drop(agents);
-    
+
     let log_file_pathname = format!("output/{}.txt", "resources");
     let plot_file_pathname = format!("output/{}.gif", "resources");
     let mut root = BitMapBackend::gif(plot_file_pathname, (640, 480), 100).unwrap().into_drawing_area();
@@ -191,7 +205,7 @@ fn main() {
             }
         }
 
-        if (tick % configs.plotting_frame_subselection_factor) == 0 {
+        if configs.plot_graph && (tick % configs.plotting_frame_subselection_factor) == 0 {
             println!("Plotting frame for tick {}", tick);
             plot_resource_distribution(&tile.agents, &mut root, tick);
         }
