@@ -106,11 +106,11 @@ impl Tile {
 }
 
 
-pub trait Decider {
+pub trait ActionDecider {
     fn decide(&self, agent: &Agent, transient_actions: Vec<AnyAction>, data: &DecisionAvailableData, rng: &mut StdRng) -> AnyAction;
 }
 
-pub trait Transformer {
+pub trait ActionTransformer {
     fn transform(&self, base_actions: &mut Vec<AnyAction>) -> (); //Procedure
 }
 
@@ -122,11 +122,11 @@ pub trait GameProvider {
 pub trait PoolProvider {
     fn provide_pool(&self, providers: &Vec<impl GameProvider>, tick: usize) -> Vec<Game>;
 }
-pub trait Assigner {
+pub trait AgentAssigner {
     fn assign_and_consume_agents(&self, game: &Game, available_agents: &mut Vec<Agent>) -> Option<BTreeMap<AgentID, AnyRole>>; 
 }
 
-pub trait Initializer {
+pub trait AgentInitializer {
     fn initialize_agents(&self, configs: &Configs) -> Vec<Agent>;
 }
 

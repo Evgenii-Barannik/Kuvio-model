@@ -122,17 +122,16 @@ pub fn log_reputations(m: &ReputationMatrix, log: &mut String) {
     }
 }
 
-pub fn plot_resource_distribution(
-    agents: &Vec<Agent>,
-    root: &mut DrawingArea<BitMapBackend<'_>, Shift>,
-    tick_number: usize,
-) {
-    let log_resources: Vec<f64> = agents.iter()
-    .map(|agent| f64::log10(*agent.resources.get(&AnyResource::Coins).unwrap() as f64))
-    .collect();
-
+pub fn plot_resource_distribution( agents: &Vec<Agent>, root: &mut DrawingArea<BitMapBackend<'_>, Shift>, tick_number: usize) {
     let max_log_resource_for_plotting = 4.0;
     let plot_height = 10u32;
+    let bucket_count = 100;
+    let bucket_width = max_log_resource_for_plotting / bucket_count as f64;
+    let colormap = VulcanoHSL {};
+    
+    let text_size = 15;
+    let tick_info = &format!("Tick: {}", tick_number);
+    
     root.fill(&WHITE).unwrap();
     let mut chart = ChartBuilder::on(&root)
         .margin(5)
@@ -143,15 +142,12 @@ pub fn plot_resource_distribution(
         .unwrap();
     chart.configure_mesh().x_desc("log10(Coin)").y_desc("N").draw().unwrap();
 
-    let bucket_count = 100;
-    let bucket_width = max_log_resource_for_plotting / bucket_count as f64;
     let mut buckets = vec![0u32; bucket_count];
-    let colormap = VulcanoHSL {};
-    
-    let text_size = 15;
-    let tick_info = &format!("Tick: {}", tick_number);
+    let mut rectangles_to_draw = vec![];
+    let mut ids_to_draw = vec![];
 
-    for (agent_id, log_resource) in log_resources.iter().enumerate() {
+    for (agent_id, agent) in agents.iter().enumerate() {
+        let log_resource = f64::log10(*agent.resources.get(&AnyResource::Coins).unwrap() as f64);
         let bucket_index = min(((log_resource / max_log_resource_for_plotting) * (bucket_count as f64 - 1.0)).floor() as usize, bucket_count-1); 
         let relative_position = agent_id as f32 / agents.len() as f32;
         let color = colormap.get_color(relative_position);
@@ -161,24 +157,26 @@ pub fn plot_resource_distribution(
         let bar_bottom = buckets[bucket_index];
         let bar_top = bar_bottom + 1;
         
-        chart.draw_series(std::iter::once(
+        rectangles_to_draw.push(
             Rectangle::new(
             [(bar_left, bar_bottom), (bar_right, bar_top)],
             color.filled())
-        )
-        ).unwrap();
+        );
 
         let padded_id = format!("{:<3}", agent_id);
-        chart.draw_series(std::iter::once(
-            EmptyElement::at(((bar_left+bar_right)/2.0, bar_top)) 
+
+        ids_to_draw.push(
+            EmptyElement::<(f64, u32), BitMapBackend<'_>>::at(((bar_left+bar_right)/2.0, bar_top)) 
             + Text::new(padded_id[0..1].to_string(), (-3, 0), ("sans-serif", text_size-2).into_font())
             + Text::new(padded_id[1..2].to_string(), (-3, 10), ("sans-serif", text_size-2).into_font())
             + Text::new(padded_id[2..3].to_string(), (-3, 20), ("sans-serif", text_size-2).into_font())
-        )).unwrap();
-
+        );
         buckets[bucket_index]+= 1;
-        
     }
+
+    chart.draw_series(rectangles_to_draw).unwrap();
+    chart.draw_series(ids_to_draw).unwrap();
+
     root.draw(&Text::new(
         "Numbers in rectangles are Agent IDs, written from top to bottom.",
         (160, 50),

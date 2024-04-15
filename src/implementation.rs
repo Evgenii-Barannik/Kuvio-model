@@ -55,14 +55,14 @@ fn generate_normalized_vector(rng: &mut StdRng, n: usize) -> Vec<f64> {
 }
 
 struct RngDecider;
-impl Decider for RngDecider {
+impl ActionDecider for RngDecider {
     fn decide(&self, _agent: &Agent, transient_actions: Vec<AnyAction>, _data: &DecisionAvailableData, rng: &mut StdRng) -> AnyAction {
         let random_index = Uniform::new(0, transient_actions.len()).sample(rng);
         transient_actions[random_index].clone()
     }
 }
 struct UtilityComputingDecider;
-impl Decider for UtilityComputingDecider {
+impl ActionDecider for UtilityComputingDecider {
     fn decide(&self, agent: &Agent, transient_actions: Vec<AnyAction>, _data: &DecisionAvailableData, _rng: &mut StdRng) -> AnyAction {
         let assesed_utilities = transient_actions.iter()
             .map(|action| (*action).clone().into_inner())
@@ -83,7 +83,7 @@ impl Decider for UtilityComputingDecider {
     }   
 }
 
-impl Decider for AnyDecider {
+impl ActionDecider for AnyDecider {
     fn decide(&self, agent: &Agent, transient_actions: Vec<AnyAction>, data: &DecisionAvailableData, rng: &mut StdRng) -> AnyAction {
         match self {
             AnyDecider::RngDecider => {
@@ -98,18 +98,18 @@ impl Decider for AnyDecider {
 
 
 struct TrivialTransformer;
-impl Transformer for TrivialTransformer  {
+impl ActionTransformer for TrivialTransformer  {
     fn transform(&self, _actions: &mut Vec<AnyAction>) {}
 }
 
 struct AddMintTransformer;
-impl Transformer for AddMintTransformer {
+impl ActionTransformer for AddMintTransformer {
     fn transform(&self, actions: &mut Vec<AnyAction>) {
         actions.push(AnyAction::mint_action)
     }
 }
 struct AddWorkTransformer;
-impl Transformer for AddWorkTransformer {
+impl ActionTransformer for AddWorkTransformer {
     fn transform(&self, actions: &mut Vec<AnyAction>) {
         actions.push(AnyAction::work_action)
     }
@@ -168,7 +168,7 @@ impl ParticipationChecker for AnyParticipationChecker {
 }
 
 struct FirstAvailableAgentsAssigner;
-impl Assigner for FirstAvailableAgentsAssigner {
+impl AgentAssigner for FirstAvailableAgentsAssigner {
     fn assign_and_consume_agents(&self, game: &Game, available_agents: &mut Vec<Agent>) -> Option<BTreeMap<AgentID, AnyRole>> {
         let mut assigned_agents: BTreeMap<AgentID, AnyRole> = BTreeMap::new();
         
@@ -245,7 +245,7 @@ impl Assigner for FirstAvailableAgentsAssigner {
 }
 
 struct TrivialInitializer;
-impl Initializer for TrivialInitializer {
+impl AgentInitializer for TrivialInitializer {
     fn initialize_agents(&self, configs: &Configs) -> Vec<Agent> {
         let mut agents = vec![];
 
@@ -328,11 +328,11 @@ impl AnyTransformer {
     }
 }
 
-pub fn get_initializer() -> impl Initializer {
+pub fn get_initializer() -> impl AgentInitializer {
     TrivialInitializer
 }
 
-pub fn get_agent_assigner() -> impl Assigner {
+pub fn get_agent_assigner() -> impl AgentAssigner {
     FirstAvailableAgentsAssigner
 }
 
