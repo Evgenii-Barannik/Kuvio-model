@@ -31,7 +31,7 @@ mod implementation;
 
 use io::*;
 use implementation::{AnyAction, AnyParticipationChecker, AnyDecider, AnyResource, AnyRole, AnyTransformer};
-use implementation::{get_initializer, get_pool_provider, get_agent_assigner, get_game_providers};
+use implementation::{get_initializer, get_pool_provider, get_agent_assigner};
 
 type AgentID = usize;
 type Resources = BTreeMap<AnyResource, usize>;
@@ -60,8 +60,10 @@ pub struct RoleDescription {
     transformer: AnyTransformer,
 }
 
-pub struct Game  {
+#[derive(Clone)]
+pub struct Game {
     roles: BTreeMap<AnyRole, RoleDescription>,
+    associated_game: Option<Box<Game>>,
 }
 
 
@@ -120,7 +122,7 @@ pub trait GameProvider {
 }
 
 pub trait PoolProvider {
-    fn provide_pool(&self, providers: &Vec<impl GameProvider>, tick: usize) -> Vec<Game>;
+    fn provide_all_games(&self, gamepool: &mut Vec<Game>, tick: usize) -> (); // Procedure
 }
 pub trait AgentAssigner {
     fn assign_and_consume_agents(&self, game: &Game, available_agents: &mut Vec<Agent>) -> Option<BTreeMap<AgentID, AnyRole>>; 
@@ -167,6 +169,16 @@ impl Game {
             choosen_action(&mut ordered_agents[agent_id]) 
         } 
     }
+    pub fn create_deep_associated_game(depth: usize, final_game: Game) -> Game {
+        if depth == 0 {
+            return final_game.clone();
+        } else {
+            let roles: BTreeMap<AnyRole, RoleDescription> = BTreeMap::new();
+            let nested_game = Game::create_deep_associated_game(depth - 1, final_game);
+            let game = Game {roles, associated_game: Some(Box::new(nested_game))};
+            game
+        }
+    }
 
 }
 
@@ -177,33 +189,36 @@ fn main() {
 
     let configs = read_configs();
     let pool_provider = get_pool_provider();
-    let game_providers = get_game_providers();
     let agent_assigner = get_agent_assigner();
-
     let reputations = vec![vec![1f64; configs.agent_count]; configs.agent_count];
-    let mut rng = StdRng::seed_from_u64(configs.seed as u64);
-    let mut tile = Tile::new(vec![], BTreeMap::new(), reputations);
     
-    let mut agents = get_initializer().initialize_agents(&configs);
-    tile.agents.append(&mut agents);
-    drop(agents);
-
     let log_file_pathname = format!("output/{}.txt", "resources");
     let plot_file_pathname = format!("output/{}.gif", "resources");
     let mut root = BitMapBackend::gif(plot_file_pathname, (640, 480), 100).unwrap().into_drawing_area();
     
+    let mut rng = StdRng::seed_from_u64(configs.seed as u64);
+    let mut tile = Tile::new(get_initializer().initialize_agents(&configs), BTreeMap::new(), reputations);
+    let mut gamepool: Vec<Game> = vec![];
+    
     for tick in 0..configs.tick_count {
+        let mut associated_games: Vec<Game> = vec![];
+        pool_provider.provide_all_games(&mut gamepool, tick);
+        gamepool.shuffle(&mut rng);
+
         let mut transient_consumable_agents = tile.agents.clone();
         // transient_consumable_agents.shuffle(& mut rng);
-        let mut game_pool = pool_provider.provide_pool(&game_providers, tick);
-        game_pool.shuffle(&mut rng);
 
-        for game in game_pool{
-            let maybe_assigned_agents = agent_assigner.assign_and_consume_agents(&game, &mut transient_consumable_agents);
+        for suggested_game in &gamepool{
+            let maybe_assigned_agents = agent_assigner.assign_and_consume_agents(&suggested_game, &mut transient_consumable_agents);
             if let Some(assigned_agents) = maybe_assigned_agents {
-                game.prepare_and_execute_actions(&assigned_agents, &mut tile.agents, &mut rng);
+                suggested_game.prepare_and_execute_actions(&assigned_agents, &mut tile.agents, &mut rng);
+                if let Some(gamebox) = &suggested_game.associated_game {
+                    associated_games.push(*gamebox.clone()); // If played game had an associated game, push it. 
+                }
             }
         }
+        gamepool.clear();
+        gamepool.append(&mut associated_games);
 
         if configs.plot_graph && (tick % configs.plotting_frame_subselection_factor) == 0 {
             println!("Plotting frame for tick {}", tick);
