@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::borrow::BorrowMut;
 use std::fs;
 use std::time::Instant;
@@ -26,29 +27,30 @@ use std::iter::zip;
 use rand::prelude::SliceRandom;
 // use strum::IntoEnumIterator;
 use lazy_static::lazy_static;
+use std::any::TypeId;
 
 use super::*;
 
 struct RngDecider;
 impl ActionDecider for RngDecider {
-    fn decide(&self, _agent: &Agent, transient_actions: Vec<AnyAction>, _data: &DecisionAvailableData, rng: &mut StdRng) -> AnyAction {
+    fn decide(&self, _tile: &Tile, _agent_id: AgentID, transient_actions: Vec<AnyAction>, _data: &DecisionAvailableData, rng: &mut StdRng) -> AnyAction {
         let random_index = Uniform::new(0, transient_actions.len()).sample(rng);
         transient_actions[random_index].clone()
     }
 }
 struct UtilityComputingDecider;
 impl ActionDecider for UtilityComputingDecider {
-    fn decide(&self, agent: &Agent, transient_actions: Vec<AnyAction>, _data: &DecisionAvailableData, _rng: &mut StdRng) -> AnyAction {
-        let assesed_utilities = transient_actions.iter()
+    fn decide(&self, tile: &Tile, agent_id: AgentID, transient_actions: Vec<AnyAction>, _data: &DecisionAvailableData, _rng: &mut StdRng) -> AnyAction {
+        let possible_future_utilities = transient_actions.iter()
             .map(|action| (*action).clone().into_inner())
             .map(|f| { 
-                let mut agent = agent.clone();
-                f(&mut agent);
-                agent.get_utility()
+                let mut tile_clone = tile.clone();
+                f(&mut tile_clone, agent_id);
+                tile.agents[agent_id].get_utility()
             } )
             .collect::<Vec<f64>>();
             
-        let choosen_index = assesed_utilities.iter()
+        let choosen_index = possible_future_utilities.iter()
             .enumerate()
             .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Less))
             .map(|(index, _)| index)
@@ -59,13 +61,13 @@ impl ActionDecider for UtilityComputingDecider {
 }
 
 impl ActionDecider for AnyDecider {
-    fn decide(&self, agent: &Agent, transient_actions: Vec<AnyAction>, data: &DecisionAvailableData, rng: &mut StdRng) -> AnyAction {
+    fn decide(&self, tile: &Tile, agent_id: AgentID, transient_actions: Vec<AnyAction>, data: &DecisionAvailableData, rng: &mut StdRng) -> AnyAction {
         match self {
             AnyDecider::RngDecider => {
-                RngDecider.decide(agent, transient_actions, data, rng)
+                RngDecider.decide(tile, agent_id, transient_actions, data, rng)
             }
             AnyDecider::UtilityComputingDecider => {
-                UtilityComputingDecider.decide(agent, transient_actions, data, rng)
+                UtilityComputingDecider.decide (tile, agent_id, transient_actions, data, rng)
             }
         }
     }
@@ -89,21 +91,22 @@ impl ParticipationChecker for AnyParticipationChecker {
     }
 }
 
-struct FirstAvailableAgentsAssigner;
-impl AgentAssigner for FirstAvailableAgentsAssigner {
+struct FirstAvailableAgentAssigner;
+impl AgentAssigner for FirstAvailableAgentAssigner {
     fn assign_and_consume_agents(&self, game: &Game, available_agents: &mut Vec<Agent>) -> Option<BTreeMap<AgentID, AnyRole>> {
         let mut assigned_agents: BTreeMap<AgentID, AnyRole> = BTreeMap::new();
-        
-        // Required roles assignments
-        let required_roles = game.roles.clone().into_iter()
-        .filter_map(|(k, v)| {
-            if let AnyUniqueness::RequiredMultipletRole(min_multiplicity, max_multiplicity) = v.uniqueness {
-                Some((k as AnyRole, min_multiplicity, max_multiplicity))
-            } else { None }
+        let all_roles = game.roles.clone().into_iter()
+        .map(|(role, description)| {
+            match description.uniqueness {
+                AnyUniqueness::RequiredMultipletRole(min, max) => 
+                (AnyUniqueness::RequiredMultipletRole.type_id(), role as AnyRole, min, max),
+                AnyUniqueness::OptionalMultipletRole(min, max) => 
+                (AnyUniqueness::OptionalMultipletRole.type_id(), role as AnyRole, min, max)
+            }
         })
-        .collect::<Vec<(AnyRole, usize, usize)>>();
+        .collect::<Vec<(TypeId, AnyRole, usize, usize)>>();
     
-    for (role, min_multiplicity, max_multiplicity) in required_roles.iter() {
+    for (typeid, role, min_multiplicity, max_multiplicity) in all_roles.iter() {
         assert!(*max_multiplicity > 0usize); // TODO: Move to the init phase?
         assert!(max_multiplicity >= min_multiplicity); // TODO: Move to the init phase?
         let mut multiplicity_remaining = max_multiplicity.clone();
@@ -125,42 +128,12 @@ impl AgentAssigner for FirstAvailableAgentsAssigner {
                 available_agents.retain(|agent| !agents_to_consume.contains(&agent.id));
                 assigned_agents.append(&mut suggested_agents);
             } else {
-                return None; // Assignment to one required role failed, so the game will not be played.
+                if typeid == &AnyUniqueness::RequiredMultipletRole.type_id() {
+                    return None; // Assignment to one required role failed, so the game will not be played.
+                }
             };
         } 
         
-        // Optional roles assignments
-        let optional_roles = game.roles.clone().into_iter()
-        .filter_map(|(k, v)| {
-            if let AnyUniqueness::OptionalMultipletRole(min_multiplicity, max_multiplicity) = v.uniqueness {
-                Some((k as AnyRole, min_multiplicity, max_multiplicity))
-            } else { None }
-        })
-        .collect::<Vec<(AnyRole, usize, usize)>>();
-    
-    for (role, min_multiplicity, max_multiplicity) in optional_roles.iter() {
-        assert!(*max_multiplicity > 0usize); // TODO: Move to the init phase?
-        assert!(max_multiplicity >= min_multiplicity); // TODO: Move to the init phase?
-        let mut multiplicity_remaining = max_multiplicity.clone();
-        let mut agents_to_consume: Vec<AgentID> = vec![];
-        let mut suggested_agents: BTreeMap<AgentID, AnyRole> = BTreeMap::new();
-
-            'agent_loop: for agent in available_agents.iter() {
-                if agent.participation_checker.check_if_agent_participates(agent, game, role) {
-                    suggested_agents.insert(agent.id, role.to_owned());
-                    agents_to_consume.push(agent.id);
-
-                    multiplicity_remaining -= 1;
-                    if multiplicity_remaining == 0 {
-                        break 'agent_loop
-                    }
-                }
-            }
-            if agents_to_consume.len() >= *min_multiplicity {
-                available_agents.retain(|agent| !agents_to_consume.contains(&agent.id));
-                assigned_agents.append(&mut suggested_agents);
-            }
-        } 
         Some(assigned_agents)
 
     }
@@ -175,26 +148,26 @@ impl AgentAssigner for FirstAvailableAgentsAssigner {
 // 4B) If you choose to create new Transformer implementing struct, add it to the AnyTransformer enum and change AnyTransformer traits implementation.
 // 4C) Use your Transformer inside Game that is created by method of the some GameProvider implementing struct.
 
-fn pass_action(_agent: &mut Agent) {} // Action that does nothing
+fn trivial_action(tile: &mut Tile, agent_id: AgentID) {} // Action that does nothing
 
-fn mint_action(agent: &mut Agent) { 
-    *agent.resources.entry(AnyResource::Coins).or_insert(0) += 10;
+fn mint_action(tile: &mut Tile, agent_id: AgentID) { 
+    *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) += 10;
 }
 
-fn work_action(agent: &mut Agent) { 
-    *agent.resources.entry(AnyResource::Coins).or_insert(0) += 1;
+fn work_action(tile: &mut Tile, agent_id: AgentID) { 
+    *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) += 1;
 }
 
-fn remove_coins_action (agent: &mut Agent) {
-    if *agent.resources.entry(AnyResource::Coins).or_insert(0) >= 2 {
-        *agent.resources.entry(AnyResource::Coins).or_insert(0) -= 2;
+fn remove_coins_action (tile: &mut Tile, agent_id: AgentID) {
+    if *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) >= 1 {
+        *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) -= 1;
     }
 }
 
 impl AnyActionIntoInner for AnyAction {
     fn into_inner(self) -> Action {
         match self {
-            AnyAction::pass_action => pass_action,
+            AnyAction::trivial_action => trivial_action,
             AnyAction::mint_action => mint_action,
             AnyAction::work_action => work_action,
             AnyAction::remove_coins_action => remove_coins_action
@@ -230,18 +203,15 @@ impl ActionTransformer for RemoveCoinsTransformer {
 
 lazy_static! {
     static ref THE_END_GAME: Game = {
-        let mut the_end_roles = BTreeMap::new();
-        the_end_roles.insert(
-            AnyRole::TheEndRole(TheEndRole::Anyone),
-            RoleDescription {
-                uniqueness: AnyUniqueness::RequiredMultipletRole(1, usize::MAX),
-                transformer: AnyTransformer::RemoveCoinsTransformer,
-            }
-        );
+        let role = AnyRole::TheEndRole(TheEndRole::Anyone);
+        let description = RoleDescription {
+            uniqueness: AnyUniqueness::RequiredMultipletRole(1, usize::MAX),
+            transformer: AnyTransformer::RemoveCoinsTransformer,
+        };
 
         Game {
-            roles: the_end_roles,
-            associated_game: None,
+            roles: BTreeMap::from([(role, description)]),
+            consequent_game: None,
         }
     };
 
@@ -263,8 +233,8 @@ lazy_static! {
             }
         );
 
-        let associated_game = Box::from(Game::create_deep_associated_game(30, THE_END_GAME.clone()));
-        Game { roles, associated_game: Some(associated_game)}
+        let consequent_game = Some(Box::from(Game::create_delayed_consequent_game(30, THE_END_GAME.clone())));
+        Game {roles, consequent_game}
     };
 }
 
@@ -273,7 +243,7 @@ struct KingdomGameProvider;
 impl GameProvider for KingdomGameProvider {
     fn provide_game(&self) -> Game {
         let game = KINGDOM_GAME.clone();
-        self.check_if_all_roles_are_described(&game.roles); // TODO: Move checks outside impl
+        self.check_if_all_roles_are_described(&game.roles); // TODO: Move checks outside impl, check consequent games.
         game
     }
 
@@ -302,7 +272,7 @@ impl AgentInitializer for BasicInitializer {
             agents.push(
                 Agent::new(
                     BTreeMap::new(),
-                    vec![AnyAction::pass_action],
+                    vec![AnyAction::trivial_action],
                     decider,
                     AnyParticipationChecker::TrivialParticipationChecker,
                     i as AgentID,
@@ -318,10 +288,7 @@ impl AgentInitializer for BasicInitializer {
 struct KingdomPoolProvider;
 impl PoolProvider for KingdomPoolProvider {
     fn provide_all_games(&self, gamepool: &mut Vec<Game>, _tick: usize) -> () {
-        let providers = vec![&KingdomGameProvider];
-        for provider in providers {
-            gamepool.push(provider.provide_game());
-        }
+        gamepool.push(KingdomGameProvider.provide_game());
     }    
 }    
 
@@ -336,7 +303,7 @@ pub enum AnyResource {
 #[allow(non_camel_case_types)]
 #[derive(Clone, Debug)]
 pub enum AnyAction { 
-    pass_action,
+    trivial_action,
     mint_action,
     work_action,
     remove_coins_action,
@@ -378,7 +345,7 @@ pub fn get_initializer() -> impl AgentInitializer {
 }
 
 pub fn get_agent_assigner() -> impl AgentAssigner {
-    FirstAvailableAgentsAssigner
+    FirstAvailableAgentAssigner
 }
 
 pub fn get_pool_provider() -> impl PoolProvider {
