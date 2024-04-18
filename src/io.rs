@@ -1,34 +1,14 @@
-use std::borrow::BorrowMut;
 use std::fs;
-use std::time::Instant;
 use std::vec;
-use std::collections::{BTreeMap};
-use std::hash::{Hash, Hasher};
-use std::fs::write;
-use std::vec::Drain;
-use itertools::Itertools;
 use std::iter::IntoIterator;
-use rand::distributions::{Distribution, WeightedIndex};
-use rand::{Rng, rngs::StdRng, SeedableRng};
-use strum::IntoEnumIterator;
-use strum_macros::EnumIter;
 use plotters::{coord::Shift, prelude::*};
-use toml::map::Map;
 use toml::Value;
 use std::path::PathBuf;
 use walkdir::WalkDir;
-use ordered_float::OrderedFloat; // Wrapper over f64 to support hashing
 use std::cmp::min;
-use rand::distributions::Uniform; 
-use rayon::prelude::*;
-// use rayon::ThreadPoolBuilder;
-use std::iter::zip;
-use rand::prelude::SliceRandom;
-// use strum::IntoEnumIterator;
 
-use crate::Resources;
+use super::{AnyResource, Tile};
 
-use super::{Agent, AnyResource, ReputationMatrix};
 #[derive(Debug, Clone)]
 pub struct Configs { 
     pub plot_graph: bool, 
@@ -96,33 +76,7 @@ pub fn read_configs() -> Configs {
     panic!("config.toml was not read") 
 }
 
-
-pub fn log_resources (agents: &Vec<Agent>, log: &mut String) {
-    log.push_str("Agent IDs and final resources:\n");
-    for agent in agents.iter() {
-        log.push_str(&format!("{:2}  {:?}\n", agent.id, &agent.resources));
-    }
-    log.push_str("\n");
-}
-
-pub fn log_reputations(m: &ReputationMatrix, log: &mut String) {
-    log.push_str("Final reputation matrix: \n");
-    let header: String = (0..m[0].len())
-        .map(|col_index| format!("{:5}", col_index))
-        .collect::<Vec<String>>()
-        .join(" ");
-    log.push_str(&format!("IDs {}\n", header));
-
-    for (row_index, row) in m.iter().enumerate() {
-        let row_str = row.iter()
-            .map(|&val| format!("{:5.0}", val))
-            .collect::<Vec<String>>()
-            .join(" ");
-        log.push_str(&format!("{:2}  {}\n", row_index, row_str));
-    }
-}
-
-pub fn plot_resource_distribution( agents: &Vec<Agent>, root: &mut DrawingArea<BitMapBackend<'_>, Shift>, tick_number: usize) {
+pub fn plot_resource_distribution(tile: &Tile, root: &mut DrawingArea<BitMapBackend<'_>, Shift>, tick_number: usize) {
     let max_log_resource_for_plotting = 4.0;
     let plot_height = 10u32;
     let bucket_count = 100;
@@ -146,36 +100,50 @@ pub fn plot_resource_distribution( agents: &Vec<Agent>, root: &mut DrawingArea<B
     let mut rectangles_to_draw = vec![];
     let mut ids_to_draw = vec![];
 
-    for (agent_id, agent) in agents.iter().enumerate() {
-        let log_resource = f64::log10(*agent.resources.get(&AnyResource::Coins).unwrap() as f64);
+    let agent_resources = tile.agents.iter()
+        .map(|agent| *agent.resources.get(&AnyResource::Coins).unwrap() as f64)
+        .collect::<Vec<f64>>();
+
+    let agents_plus_tile_resources = {   // Tile resource value if the last element in vec
+        let mut resources = agent_resources.clone();
+        resources.push(*tile.resources.get(&AnyResource::Coins).unwrap() as f64);  
+        resources
+    };
+
+    for (agent_id, resource) in agents_plus_tile_resources.iter().enumerate() {
+        let log_resource = f64::log10(*resource);
         let bucket_index = min(((log_resource / max_log_resource_for_plotting) * (bucket_count as f64 - 1.0)).floor() as usize, bucket_count-1); 
-        let relative_position = agent_id as f32 / agents.len() as f32;
+        let relative_position = agent_id as f32 / agent_resources.len() as f32;
         let color = colormap.get_color(relative_position);
 
         let bar_left = bucket_index as f64 * bucket_width;
         let bar_right = bar_left + bucket_width;
         let bar_bottom = buckets[bucket_index];
         let bar_top = bar_bottom + 1;
-        
-        rectangles_to_draw.push(
-            Rectangle::new(
-            [(bar_left, bar_bottom), (bar_right, bar_top)],
-            color.filled())
-        );
 
-        let padded_id = format!("{:<3}", agent_id);
+        if buckets[bucket_index] < plot_height { // Draw if will be visible.
+            rectangles_to_draw.push(
+                Rectangle::new(
+                    [(bar_left, bar_bottom), (bar_right, bar_top)],
+                    color.filled())
+            );
+    
+            let padded_id = if !(agent_id == agents_plus_tile_resources.len() - 1) {
+                format!("{:<3}", agent_id) // For Agents
+            } else {
+                "T  ".to_string() // For Tile
+            };
+                
+            ids_to_draw.push(
+                EmptyElement::<(f64, u32), BitMapBackend<'_>>::at(((bar_left+bar_right)/2.0, bar_top)) 
+                + Text::new(padded_id[0..1].to_string(), (-3, 0), ("sans-serif", text_size-2).into_font())
+                + Text::new(padded_id[1..2].to_string(), (-3, 10), ("sans-serif", text_size-2).into_font())
+                + Text::new(padded_id[2..3].to_string(), (-3, 20), ("sans-serif", text_size-2).into_font())
+            );
 
-        ids_to_draw.push(
-            EmptyElement::<(f64, u32), BitMapBackend<'_>>::at(((bar_left+bar_right)/2.0, bar_top)) 
-            + Text::new(padded_id[0..1].to_string(), (-3, 0), ("sans-serif", text_size-2).into_font())
-            + Text::new(padded_id[1..2].to_string(), (-3, 10), ("sans-serif", text_size-2).into_font())
-            + Text::new(padded_id[2..3].to_string(), (-3, 20), ("sans-serif", text_size-2).into_font())
-        );
-        buckets[bucket_index]+= 1;
+            buckets[bucket_index]+= 1;
+        }
     }
-
-    chart.draw_series(rectangles_to_draw).unwrap();
-    chart.draw_series(ids_to_draw).unwrap();
 
     root.draw(&Text::new(
         "Numbers in rectangles are Agent IDs, written from top to bottom.",
@@ -189,5 +157,7 @@ pub fn plot_resource_distribution( agents: &Vec<Agent>, root: &mut DrawingArea<B
         ("sans-serif", text_size).into_font(),
     )).unwrap();
 
+    chart.draw_series(rectangles_to_draw).unwrap();
+    chart.draw_series(ids_to_draw).unwrap();
     root.present().unwrap();
 }

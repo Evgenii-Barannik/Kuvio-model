@@ -1,36 +1,17 @@
 use std::any::Any;
-use std::borrow::BorrowMut;
-use std::fs;
-use std::time::Instant;
-use std::vec;
-use std::collections::{BTreeMap};
-use std::hash::{Hash, Hasher};
-use std::fs::write;
-use std::vec::Drain;
-use itertools::Itertools;
+use std::collections::BTreeMap;
+use std::hash::Hash;
 use std::iter::IntoIterator;
-use rand::distributions::{Distribution, WeightedIndex};
-use rand::{Rng, rngs::StdRng, SeedableRng};
+use rand::distributions::Distribution;
+use rand::{Rng, rngs::StdRng};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
-use plotters::{coord::Shift, prelude::*};
-use toml::map::Map;
-use toml::Value;
-use std::path::PathBuf;
-use walkdir::WalkDir;
-use ordered_float::OrderedFloat; // Wrapper over f64 to support hashing
-use std::cmp::min;
+use plotters::*;
 use rand::distributions::Uniform; 
-use rayon::prelude::*;
-// use rayon::ThreadPoolBuilder;
-use std::iter::zip;
-use rand::prelude::SliceRandom;
-// use strum::IntoEnumIterator;
 use lazy_static::lazy_static;
 use std::any::TypeId;
 
 use super::*;
-
 struct RngDecider;
 impl ActionDecider for RngDecider {
     fn decide(&self, _tile: &Tile, _agent_id: AgentID, transient_actions: Vec<AnyAction>, _data: &DecisionAvailableData, rng: &mut StdRng) -> AnyAction {
@@ -40,12 +21,12 @@ impl ActionDecider for RngDecider {
 }
 struct UtilityComputingDecider;
 impl ActionDecider for UtilityComputingDecider {
-    fn decide(&self, tile: &Tile, agent_id: AgentID, transient_actions: Vec<AnyAction>, _data: &DecisionAvailableData, _rng: &mut StdRng) -> AnyAction {
+    fn decide(&self, tile: &Tile, agent_id: AgentID, transient_actions: Vec<AnyAction>, _data: &DecisionAvailableData, rng: &mut StdRng) -> AnyAction {
         let possible_future_utilities = transient_actions.iter()
             .map(|action| (*action).clone().into_inner())
             .map(|f| { 
                 let mut tile_clone = tile.clone();
-                f(&mut tile_clone, agent_id);
+                f(&mut tile_clone, agent_id, rng);
                 tile.agents[agent_id].get_utility()
             } )
             .collect::<Vec<f64>>();
@@ -140,28 +121,46 @@ impl AgentAssigner for FirstAvailableAgentAssigner {
 }
 
 
-// How to add new action to some Game:
-// 1) Write new action function;
-// 2) Add this action function to the AnyAction enum;
+// How to add a new Action to a Game:
+// 1) Write new Action function (check required signature);
+// 2) Add this Action function to the AnyAction enum;
 // 3) Change AnyAction trait implementation to describe new variant;
-// 4) Add new or change one of the existing Transformers. Or add your new action to the agent initialization as one of the base actions (see impl AgentInitializer of some structs).
+// 4) Add new or change one of the existing Transformers; or add your new Action to the Agent initialization as one of the base_actions (see impl AgentInitializer of some structs).
 // 4B) If you choose to create new Transformer implementing struct, add it to the AnyTransformer enum and change AnyTransformer traits implementation.
-// 4C) Use your Transformer inside Game that is created by method of the some GameProvider implementing struct.
+// 4C) Use your Transformer for Game creation. Games are created using methods of GameProvider implementing structs.
 
-fn trivial_action(tile: &mut Tile, agent_id: AgentID) {} // Action that does nothing
 
-fn mint_action(tile: &mut Tile, agent_id: AgentID) { 
-    *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) += 10;
+fn trivial_action(_tile: &mut Tile, _agent_id: AgentID, _rng: &mut StdRng) {} // Action that does nothing
+
+fn mint_action(tile: &mut Tile, agent_id: AgentID, rng: &mut StdRng) {
+    let difficulty_growth_rate = 1.0001;
+    let probability_of_success = chance_to_mine_gold(&tile, difficulty_growth_rate);
+    
+    if rng.gen_bool(probability_of_success) {
+        *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) += 10;
+    }
 }
 
-fn work_action(tile: &mut Tile, agent_id: AgentID) { 
+fn work_action(tile: &mut Tile, agent_id: AgentID, _rng: &mut StdRng) { 
     *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) += 1;
 }
 
-fn remove_coins_action (tile: &mut Tile, agent_id: AgentID) {
-    if *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) >= 1 {
-        *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) -= 1;
-    }
+fn pay_taxes(tile: &mut Tile, agent_id: AgentID, _rng: &mut StdRng) {
+    let tax = *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) / 100;
+    *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) -= tax;
+    *tile.resources.entry(AnyResource::Coins).or_insert(0) += tax;
+}
+
+fn chance_to_mine_gold(tile: &Tile, difficulty_growth_rate: f64) -> f64 {
+    let agents_gold =tile.agents
+    .iter()
+    .map(|agent|agent.resources.get(&AnyResource::Coins).unwrap_or(&0))
+    .fold(0usize, |acc, gold| acc + gold);
+
+    let total_gold = agents_gold + tile.resources.get(&AnyResource::Coins).unwrap_or(&0);
+ 
+    let initial_difficulty = 1.0;
+    1.0/(initial_difficulty * f64::powi(difficulty_growth_rate, total_gold as i32))
 }
 
 impl AnyActionIntoInner for AnyAction {
@@ -170,7 +169,7 @@ impl AnyActionIntoInner for AnyAction {
             AnyAction::trivial_action => trivial_action,
             AnyAction::mint_action => mint_action,
             AnyAction::work_action => work_action,
-            AnyAction::remove_coins_action => remove_coins_action
+            AnyAction::remove_coins_action => pay_taxes
         }
     }
 }
@@ -261,12 +260,12 @@ impl AgentInitializer for BasicInitializer {
     fn initialize_agents(&self, configs: &Configs) -> Vec<Agent> {
         let mut agents = vec![];
 
-        let mid_index = configs.agent_count.div_ceil(2);
+        let border_index = configs.agent_count / 10;
         for i in 0..configs.agent_count {
-            let decider = if i < mid_index {
-                AnyDecider::RngDecider
-            } else {
+            let decider = if i < border_index {
                 AnyDecider::UtilityComputingDecider
+            } else {
+                AnyDecider::RngDecider
             };
 
             agents.push(
@@ -287,8 +286,10 @@ impl AgentInitializer for BasicInitializer {
 
 struct KingdomPoolProvider;
 impl PoolProvider for KingdomPoolProvider {
-    fn provide_all_games(&self, gamepool: &mut Vec<Game>, _tick: usize) -> () {
-        gamepool.push(KingdomGameProvider.provide_game());
+    fn provide_all_games(&self, gamepool: &mut Vec<Game>, tick: usize) -> () {
+        if tick % 3 == 0 {
+            gamepool.push(KingdomGameProvider.provide_game());
+        }
     }    
 }    
 

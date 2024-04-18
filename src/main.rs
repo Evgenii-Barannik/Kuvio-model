@@ -1,30 +1,12 @@
-use std::borrow::BorrowMut;
 use std::fs;
 use std::time::Instant;
 use std::vec;
-use std::collections::{BTreeMap, VecDeque};
-use std::hash::{Hash, Hasher};
+use std::collections::BTreeMap;
 use std::fs::write;
-use std::vec::Drain;
-use itertools::Itertools;
-use std::iter::IntoIterator;
-use rand::distributions::{Distribution, WeightedIndex};
-use rand::{Rng, rngs::StdRng, SeedableRng};
+use rand::{rngs::StdRng, SeedableRng};
 use strum::IntoEnumIterator;
-use strum_macros::EnumIter;
-use plotters::{coord::Shift, prelude::*};
-use toml::map::Map;
-use toml::Value;
-use std::path::PathBuf;
-use walkdir::WalkDir;
-use ordered_float::OrderedFloat; // Wrapper over f64 to support hashing
-use std::cmp::min;
-use rand::distributions::Uniform; 
-use rayon::prelude::*;
-// use rayon::ThreadPoolBuilder;
-use std::iter::zip;
+use plotters::prelude::*;
 use rand::prelude::SliceRandom;
-// use strum::IntoEnumIterator;
 
 mod io;
 mod implementation;
@@ -36,7 +18,7 @@ use implementation::{get_initializer, get_pool_provider, get_agent_assigner};
 type AgentID = usize;
 type Resources = BTreeMap<AnyResource, usize>;
 type DecisionAvailableData = BTreeMap<AgentID, Resources>;
-type Action = fn(&mut Tile, AgentID);
+type Action = fn(&mut Tile, AgentID, &mut StdRng);
 type ReputationMatrix = Vec<Vec<f64>>;
 
 #[derive(Clone, Debug)]
@@ -90,7 +72,7 @@ impl Agent {
     
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Tile {
     agents: Vec<Agent>,
     resources: Resources,
@@ -107,7 +89,6 @@ impl Tile {
         Tile{agents, resources: zeroed_resources, _reputations: reputations}
     }
 }
-
 
 pub trait ActionDecider {
     fn decide(&self, tile: &Tile, agent_id: AgentID, transient_actions: Vec<AnyAction>, _data: &DecisionAvailableData, _rng: &mut StdRng) -> AnyAction;
@@ -168,7 +149,7 @@ impl Game {
                 .collect();
 
             let choosen_action = choosen_decider.decide( immutable_tile, agent_id, actions, &availiable_data, rng).into_inner(); // TODO: Change order of args
-            choosen_action(tile, agent_id) // Tile is mutated here
+            choosen_action(tile, agent_id, rng) // Tile is mutated here
         } 
     }
     pub fn create_delayed_consequent_game(delay: usize, game: Game) -> Game {
@@ -188,12 +169,10 @@ impl Game {
 fn main() {
     let timer = Instant::now();
 
-    println!("{}", f64::log10(0.0));
-    
     fs::create_dir_all("output").unwrap();
-    let log_file_pathname = format!("output/{}.txt", "resources");
-    let plot_file_pathname = format!("output/{}.gif", "resources");
-    let mut root = BitMapBackend::gif(plot_file_pathname, (640, 480), 100).unwrap().into_drawing_area();
+    let log_file_pathname = format!("output/{}.txt", "final_state");
+    let plot_file_pathname = format!("output/{}.gif", "resources_distribution");
+    let mut root = BitMapBackend::gif(&plot_file_pathname, (640, 480), 100).unwrap().into_drawing_area();
     
     let configs = read_configs();
     let pool_provider = get_pool_provider();
@@ -225,15 +204,17 @@ fn main() {
 
         if configs.plot_graph && (tick % configs.plotting_frame_subselection_factor) == 0 {
             println!("Plotting frame for tick {}", tick);
-            plot_resource_distribution(&tile.agents, &mut root, tick);
+            plot_resource_distribution(&tile, &mut root, tick);
         }
     }
 
     let mut summary_log = String::new();
     summary_log.push_str(&format!("{:#?}\n\n", configs));
-    log_resources(&tile.agents, &mut summary_log);
-    log_reputations(&tile._reputations, &mut summary_log);
+    summary_log.push_str(&format!("Tile Resources{:#?}\n\n", tile.resources));
+    summary_log.push_str(&format!("Tile Agents {:#?}\n\n", tile.agents));
     write(&log_file_pathname, summary_log).unwrap();
 
+    println!("\nSee final state: {}", log_file_pathname);
+    println!("See plot: {}", plot_file_pathname);
     println!("Execution time: {:.3} s", timer.elapsed().as_secs_f64());
 }
