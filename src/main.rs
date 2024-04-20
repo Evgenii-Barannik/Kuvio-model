@@ -50,7 +50,7 @@ pub struct Tile {
 }
 
 #[derive(PartialEq, Clone)]
-pub enum AnyUniqueness {
+pub enum AnyUniqueness { // TODO: make other name, see  Modality 
     RequiredMultipletRole(usize, usize), // Contains min required and max possible multiplicity. Should be assigned for game to play
     OptionalMultipletRole(usize, usize), // Contains min required and max possible multiplicity. Can be assigned
 }
@@ -167,7 +167,7 @@ impl Game {
 
 
 fn main() {
-    let timer = Instant::now();
+    let timer: Instant = Instant::now();
 
     fs::create_dir_all("output").unwrap();
     let log_file_pathname = format!("output/{}.txt", "final_state");

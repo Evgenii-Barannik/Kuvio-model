@@ -134,7 +134,7 @@ fn trivial_action(_tile: &mut Tile, _agent_id: AgentID, _rng: &mut StdRng) {} //
 
 fn mint_action(tile: &mut Tile, agent_id: AgentID, rng: &mut StdRng) {
     let difficulty_growth_rate = 1.0001;
-    let probability_of_success = chance_to_mine_gold(&tile, difficulty_growth_rate);
+    let probability_of_success = chance_to_mine_gold(&tile, difficulty_growth_rate); // TODO: rename
     
     if rng.gen_bool(probability_of_success) {
         *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) += 10;
@@ -145,7 +145,18 @@ fn work_action(tile: &mut Tile, agent_id: AgentID, _rng: &mut StdRng) {
     *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) += 1;
 }
 
-fn pay_taxes(tile: &mut Tile, agent_id: AgentID, _rng: &mut StdRng) {
+fn play_lottery_action(tile: &mut Tile, agent_id: AgentID, _rng: &mut StdRng) { 
+    let agent_resources = *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0);
+    if _rng.gen_bool(0.2) {
+        *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) = agent_resources * 2;
+    } else {
+        *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) = 0;
+        *tile.resources.entry(AnyResource::Coins).or_insert(0) += agent_resources;
+    }
+}
+
+
+fn pay_taxes(tile: &mut Tile, agent_id: AgentID, _rng: &mut StdRng) { // TODO: rename
     let tax = *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) / 100;
     *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) -= tax;
     *tile.resources.entry(AnyResource::Coins).or_insert(0) += tax;
@@ -169,7 +180,8 @@ impl AnyActionIntoInner for AnyAction {
             AnyAction::trivial_action => trivial_action,
             AnyAction::mint_action => mint_action,
             AnyAction::work_action => work_action,
-            AnyAction::remove_coins_action => pay_taxes
+            AnyAction::remove_coins_action => pay_taxes,
+            AnyAction::play_lottery_action => play_lottery_action,
         }
     }
 }
@@ -177,6 +189,13 @@ impl AnyActionIntoInner for AnyAction {
 struct TrivialTransformer;
 impl ActionTransformer for TrivialTransformer  {
     fn transform(&self, _actions: &mut Vec<AnyAction>) {}
+}
+
+struct LotteryTransformer;
+impl ActionTransformer for LotteryTransformer {
+    fn transform(&self, actions: &mut Vec<AnyAction>) {
+        actions.push(AnyAction::play_lottery_action)
+    }
 }
 
 struct AddMintTransformer;
@@ -206,6 +225,20 @@ lazy_static! {
         let description = RoleDescription {
             uniqueness: AnyUniqueness::RequiredMultipletRole(1, usize::MAX),
             transformer: AnyTransformer::RemoveCoinsTransformer,
+        };
+
+        Game {
+            roles: BTreeMap::from([(role, description)]),
+            consequent_game: None,
+        }
+    };
+
+    static ref LOTTERY: Game = {
+        let role = AnyRole::LotteryRole(LotteryRole::Player);
+
+        let description = RoleDescription {
+            uniqueness: AnyUniqueness::RequiredMultipletRole(1, usize::MAX),
+            transformer: AnyTransformer::LotteryTransformer,
         };
 
         Game {
@@ -255,6 +288,23 @@ impl GameProvider for KingdomGameProvider {
     }
 }
 
+struct LotteryGameProvider;
+impl GameProvider for LotteryGameProvider {
+    fn provide_game(&self) -> Game {
+        let game = LOTTERY.clone();
+        self.check_if_all_roles_are_described(&game.roles); // TODO: Move checks outside impl, check consequent games.
+        game
+    }
+
+    fn check_if_all_roles_are_described(&self, roles: &BTreeMap<AnyRole, RoleDescription>) -> () {
+        // for role in KingdomRole::iter() { 
+        //     if !roles.contains_key(&AnyRole::KingdomRole(role.clone())) {
+        //         panic!("No description (uniqueness and transformer) for this role: {:?}", &role);
+        //     }
+        // } 
+    }
+}
+
 struct BasicInitializer;
 impl AgentInitializer for BasicInitializer {
     fn initialize_agents(&self, configs: &Configs) -> Vec<Agent> {
@@ -290,6 +340,9 @@ impl PoolProvider for KingdomPoolProvider {
         if tick % 3 == 0 {
             gamepool.push(KingdomGameProvider.provide_game());
         }
+        if tick % 50 == 0 {
+            gamepool.push(LotteryGameProvider.provide_game());
+        }
     }    
 }    
 
@@ -303,11 +356,12 @@ pub enum AnyResource {
 
 #[allow(non_camel_case_types)]
 #[derive(Clone, Debug)]
-pub enum AnyAction { 
+pub enum AnyAction { // For every Game
     trivial_action,
     mint_action,
     work_action,
     remove_coins_action,
+    play_lottery_action,
 }    
 
 #[derive(Clone, Debug)]
@@ -326,8 +380,8 @@ pub enum AnyTransformer {
     AddMintTransformer,
     AddWorkTransformer,
     RemoveCoinsTransformer,
+    LotteryTransformer,
     _TrivialTransformer,
-
 }
 
 impl AnyTransformer {
@@ -337,6 +391,7 @@ impl AnyTransformer {
             AnyTransformer::AddWorkTransformer => AddWorkTransformer.transform(actions),
             AnyTransformer::_TrivialTransformer => TrivialTransformer.transform(actions),
             AnyTransformer::RemoveCoinsTransformer => RemoveCoinsTransformer.transform(actions),
+            AnyTransformer::LotteryTransformer => LotteryTransformer.transform(actions),
         }
     }
 }
@@ -357,6 +412,7 @@ pub fn get_pool_provider() -> impl PoolProvider {
 pub enum AnyRole {
     KingdomRole(KingdomRole),
     TheEndRole(TheEndRole),
+    LotteryRole(LotteryRole),
 }    
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, EnumIter, Debug)]
@@ -368,4 +424,9 @@ pub enum KingdomRole {
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, EnumIter, Debug)]
 pub enum TheEndRole {
     Anyone
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, EnumIter, Debug)]
+pub enum LotteryRole {
+    Player
 }

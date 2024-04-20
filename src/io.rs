@@ -104,7 +104,7 @@ pub fn plot_resource_distribution(tile: &Tile, root: &mut DrawingArea<BitMapBack
         .map(|agent| *agent.resources.get(&AnyResource::Coins).unwrap() as f64)
         .collect::<Vec<f64>>();
 
-    let agents_plus_tile_resources = {   // Tile resource value if the last element in vec
+    let agents_plus_tile_resources = {   // Tile resource value is the last element in vec
         let mut resources = agent_resources.clone();
         resources.push(*tile.resources.get(&AnyResource::Coins).unwrap() as f64);  
         resources
@@ -121,7 +121,7 @@ pub fn plot_resource_distribution(tile: &Tile, root: &mut DrawingArea<BitMapBack
         let bar_bottom = buckets[bucket_index];
         let bar_top = bar_bottom + 1;
 
-        if buckets[bucket_index] < plot_height { // Draw if will be visible.
+        if buckets[bucket_index] < plot_height { // To Draw only if will be visible.
             rectangles_to_draw.push(
                 Rectangle::new(
                     [(bar_left, bar_bottom), (bar_right, bar_top)],
