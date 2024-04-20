@@ -30,10 +30,10 @@ pub struct Agent {
     id: AgentID,
 }
 
-#[derive(PartialEq, Clone)]
-pub enum AnyUniqueness {
-    RequiredMultipletRole(usize, usize), // Contains min required and max possible multiplicity. Should be assigned for game to play
-    OptionalMultipletRole(usize, usize), // Contains min required and max possible multiplicity. Can be assigned
+#[derive(Clone)]
+pub struct Game {
+    roles: BTreeMap<AnyRole, RoleDescription>,
+    consequent_game: Option<Box<Game>>,
 }
 
 #[derive(Clone)]
@@ -42,12 +42,18 @@ pub struct RoleDescription {
     transformer: AnyTransformer,
 }
 
-#[derive(Clone)]
-pub struct Game {
-    roles: BTreeMap<AnyRole, RoleDescription>,
-    consequent_game: Option<Box<Game>>,
+#[derive(Clone, Debug)]
+pub struct Tile {
+    agents: Vec<Agent>,
+    resources: Resources,
+    _reputations: ReputationMatrix,
 }
 
+#[derive(PartialEq, Clone)]
+pub enum AnyUniqueness {
+    RequiredMultipletRole(usize, usize), // Contains min required and max possible multiplicity. Should be assigned for game to play
+    OptionalMultipletRole(usize, usize), // Contains min required and max possible multiplicity. Can be assigned
+}
 
 impl Agent {
     fn new(initial_resources: Resources, base_actions: Vec<AnyAction>, decider: AnyDecider, participation_checker: AnyParticipationChecker, id: AgentID) -> Agent {
@@ -72,12 +78,6 @@ impl Agent {
     
 }
 
-#[derive(Clone, Debug)]
-pub struct Tile {
-    agents: Vec<Agent>,
-    resources: Resources,
-    _reputations: ReputationMatrix,
-}
 
 impl Tile {
     fn new(agents: Vec<Agent>, resources: Resources, reputations: Vec<Vec<f64>>) -> Tile {
