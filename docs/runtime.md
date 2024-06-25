@@ -24,8 +24,8 @@ The games should be considered to be played "simultaneously" within a tick.
 
 #### Examples
 
-- Global provider (abstract resource source/sink; exchange market; reservoir actors representation)
-- Actor (wants to play certain number of certain games)
+- Global provider (abstract resource source/sink; exchange market; reservoir agents representation)
+- Agent (wants to play certain number of certain games)
 - Tile
 
 #### Fundamental frequency heuristic

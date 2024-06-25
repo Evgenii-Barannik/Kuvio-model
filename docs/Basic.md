@@ -6,7 +6,7 @@ An agent is defined by two separate components: a list of **resources** and a li
 
 ## Resource
 
-Let's define a resource as a label that corresponds to an unsigned integer value (allowing us to refer to resources as "scalar resources"). Any resource represents the "wealth" of an **agent** in some respect. To help with a suitable intuition, we will use the name "gold" for the first defined resource. Generally, there could be many resources.
+Let's define a resource as a label that corresponds to an unsigned integer value (allowing us to refer to resources as "scalar resources"). Any resource represents the "wealth" of an **agent** in some respect. To help with a suitable intuition, we will use the name "coin" for the first defined resource. Generally, there could be many resources.
 
 We define the growth of a resource as desired and its loss as undesired.
 
@@ -18,7 +18,7 @@ Behaviour is a decision making algorithm of an **agent**, essentially probabilit
 
 ## Tile
 
-We define a tile as a community of **agents**, possibly with some rules, a list of **reputation** values between agents, and treasuries to store communal resources. A tile is finite and thus could be subsampled by selection of actors.
+We define a tile as a community of **agents**, possibly with some rules, a list of **reputation** values between agents, and treasuries to store communal resources. A tile is finite and thus could be subsampled by selection of agents.
 
 ## Reservoir
 
@@ -28,17 +28,17 @@ A reservoir is a large set of **agents** external to a given **tile**. The reser
 
 A game event is defined by the number and parameters of **agents**, their courses of actions, and outcomes. A game event changes **resource** distribution, **reputation**, and exposes information about the chosen course of action, thus revealing information about agents' behaviours.
 
-### Basic two-actor game
+### Basic two-agent game
 
-Two **actors** approach the game. Both have symmetric options to collaborate or cheat, thus 4 outcomes are possible. Resource change in a **game** is model parameter that should be adjusted to experimental conditions.
+Two **agents** approach the game. Both have symmetric options to collaborate or cheat, thus 4 outcomes are possible. Resource change in a **game** is model parameter that should be adjusted to experimental conditions.
 
-### Basic one-actor game
+### Basic one-agent game
 
-One **actor** participates and has options to collaborate or cheat, **resource** change is a model parameter
+One **agent** participates and has options to collaborate or cheat, **resource** change is a model parameter
 
-### Declinable two-actor game
+### Declinable two-agent game
 
-Two actors participate. Bothe have symmetric options to collaborate, cheat, or decline. If either declines, no resource change happens. Thus 5 outcomes are possible. Otherwise it is similar to basic 2-actor game.
+Two agents participate. Bothe have symmetric options to collaborate, cheat, or decline. If either declines, no resource change happens. Thus 5 outcomes are possible. Otherwise it is similar to basic 2-agent game.
 
 ## Time
 
