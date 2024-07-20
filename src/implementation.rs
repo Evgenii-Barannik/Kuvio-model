@@ -7,7 +7,7 @@ use rand::{Rng, rngs::StdRng};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use plotters::*;
-use rand::distributions::Uniform; 
+use rand::distributions::Uniform;
 use lazy_static::lazy_static;
 use std::any::TypeId;
 
@@ -24,13 +24,13 @@ impl ActionDecider for UtilityComputingDecider {
     fn decide(&self, tile: &Tile, agent_id: AgentID, transient_actions: Vec<AnyAction>, _data: &DecisionAvailableData, rng: &mut StdRng) -> AnyAction {
         let possible_future_utilities = transient_actions.iter()
             .map(|action| (*action).clone().into_inner())
-            .map(|f| { 
+            .map(|f| {
                 let mut tile_clone = tile.clone();
                 f(&mut tile_clone, agent_id, rng);
                 tile.agents[agent_id].get_utility()
             } )
             .collect::<Vec<f64>>();
-            
+
         let choosen_index = possible_future_utilities.iter()
             .enumerate()
             .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Less))
@@ -38,7 +38,7 @@ impl ActionDecider for UtilityComputingDecider {
             .unwrap();
 
         transient_actions[choosen_index].clone()
-    }   
+    }
 }
 
 impl ActionDecider for AnyDecider {
@@ -60,7 +60,7 @@ impl ParticipationChecker for TrivialParticipationChecker {
     fn check_if_agent_participates(&self, _agent: &Agent, _game: &Game, _proposed_role: &AnyRole) -> bool {
         true
     }
-} 
+}
 
 impl ParticipationChecker for AnyParticipationChecker {
     fn check_if_agent_participates(&self, agent: &Agent, game: &Game, _proposed_role: &AnyRole) -> bool {
@@ -79,14 +79,14 @@ impl AgentAssigner for FirstAvailableAgentAssigner {
         let all_roles = game.roles.clone().into_iter()
         .map(|(role, description)| {
             match description.uniqueness {
-                AnyUniqueness::RequiredMultipletRole(min, max) => 
+                AnyUniqueness::RequiredMultipletRole(min, max) =>
                 (AnyUniqueness::RequiredMultipletRole.type_id(), role as AnyRole, min, max),
-                AnyUniqueness::OptionalMultipletRole(min, max) => 
+                AnyUniqueness::OptionalMultipletRole(min, max) =>
                 (AnyUniqueness::OptionalMultipletRole.type_id(), role as AnyRole, min, max)
             }
         })
         .collect::<Vec<(TypeId, AnyRole, usize, usize)>>();
-    
+
     for (typeid, role, min_multiplicity, max_multiplicity) in all_roles.iter() {
         assert!(*max_multiplicity > 0usize); // TODO: Move to the init phase?
         assert!(max_multiplicity >= min_multiplicity); // TODO: Move to the init phase?
@@ -113,8 +113,8 @@ impl AgentAssigner for FirstAvailableAgentAssigner {
                     return None; // Assignment to one required role failed, so the game will not be played.
                 }
             };
-        } 
-        
+        }
+
         Some(assigned_agents)
 
     }
@@ -135,17 +135,17 @@ fn trivial_action(_tile: &mut Tile, _agent_id: AgentID, _rng: &mut StdRng) {} //
 fn mint_action(tile: &mut Tile, agent_id: AgentID, rng: &mut StdRng) {
     let difficulty_growth_rate = 1.0001;
     let probability_of_success = chance_to_mine_gold(&tile, difficulty_growth_rate); // TODO: rename
-    
+
     if rng.gen_bool(probability_of_success) {
         *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) += 10;
     }
 }
 
-fn work_action(tile: &mut Tile, agent_id: AgentID, _rng: &mut StdRng) { 
+fn work_action(tile: &mut Tile, agent_id: AgentID, _rng: &mut StdRng) {
     *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) += 1;
 }
 
-fn play_lottery_action(tile: &mut Tile, agent_id: AgentID, _rng: &mut StdRng) { 
+fn play_lottery_action(tile: &mut Tile, agent_id: AgentID, _rng: &mut StdRng) {
     let agent_resources = *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0);
     if _rng.gen_bool(0.2) {
         *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) = agent_resources * 2;
@@ -169,7 +169,7 @@ fn chance_to_mine_gold(tile: &Tile, difficulty_growth_rate: f64) -> f64 {
     .fold(0usize, |acc, gold| acc + gold);
 
     let total_gold = agents_gold + tile.resources.get(&AnyResource::Coins).unwrap_or(&0);
- 
+
     let initial_difficulty = 1.0;
     1.0/(initial_difficulty * f64::powi(difficulty_growth_rate, total_gold as i32))
 }
@@ -186,37 +186,24 @@ impl AnyActionIntoInner for AnyAction {
     }
 }
 
-struct TrivialTransformer;
-impl ActionTransformer for TrivialTransformer  {
-    fn transform(&self, _actions: &mut Vec<AnyAction>) {}
+// fn transform_trivial(_actions: &mut Vec<AnyAction>) {}
+
+fn transform_play_lottery(actions: &mut Vec<AnyAction>) {
+    actions.push(AnyAction::play_lottery_action)
 }
 
-struct LotteryTransformer;
-impl ActionTransformer for LotteryTransformer {
-    fn transform(&self, actions: &mut Vec<AnyAction>) {
-        actions.push(AnyAction::play_lottery_action)
-    }
+fn transform_add_mint(actions: &mut Vec<AnyAction>) {
+    actions.push(AnyAction::mint_action)
 }
 
-struct AddMintTransformer;
-impl ActionTransformer for AddMintTransformer {
-    fn transform(&self, actions: &mut Vec<AnyAction>) {
-        actions.push(AnyAction::mint_action)
-    }
-}
-struct AddWorkTransformer;
-impl ActionTransformer for AddWorkTransformer {
-    fn transform(&self, actions: &mut Vec<AnyAction>) {
-        actions.push(AnyAction::work_action)
-    }
+fn transform_add_work(actions: &mut Vec<AnyAction>) {
+    actions.push(AnyAction::work_action)
 }
 
-struct RemoveCoinsTransformer;
-impl ActionTransformer for RemoveCoinsTransformer {
-    fn transform(&self, actions: &mut Vec<AnyAction>) {
-        actions.clear();
-        actions.push(AnyAction::remove_coins_action);
-    }
+
+fn transform_remove_coins(actions: &mut Vec<AnyAction>) {
+    actions.clear();
+    actions.push(AnyAction::remove_coins_action);
 }
 
 lazy_static! {
@@ -224,7 +211,7 @@ lazy_static! {
         let role = AnyRole::TheEndRole(TheEndRole::Anyone);
         let description = RoleDescription {
             uniqueness: AnyUniqueness::RequiredMultipletRole(1, usize::MAX),
-            transformer: AnyTransformer::RemoveCoinsTransformer,
+            transformer: transform_remove_coins,
         };
 
         Game {
@@ -238,7 +225,7 @@ lazy_static! {
 
         let description = RoleDescription {
             uniqueness: AnyUniqueness::RequiredMultipletRole(1, usize::MAX),
-            transformer: AnyTransformer::LotteryTransformer,
+            transformer: transform_play_lottery,
         };
 
         Game {
@@ -250,18 +237,18 @@ lazy_static! {
     static ref KINGDOM_GAME: Game = {
         let mut roles = BTreeMap::new();
         roles.insert(
-            AnyRole::KingdomRole(KingdomRole::King), 
+            AnyRole::KingdomRole(KingdomRole::King),
             RoleDescription {
-                uniqueness: AnyUniqueness::RequiredMultipletRole(1usize, 1usize), 
-                transformer: AnyTransformer::AddMintTransformer,
+                uniqueness: AnyUniqueness::RequiredMultipletRole(1usize, 1usize),
+                transformer: transform_add_mint,
             }
         );
 
         roles.insert(
-            AnyRole::KingdomRole(KingdomRole::Peasant), 
+            AnyRole::KingdomRole(KingdomRole::Peasant),
             RoleDescription {
-                uniqueness: AnyUniqueness::OptionalMultipletRole(0usize, usize::MAX), 
-                transformer: AnyTransformer::AddWorkTransformer,
+                uniqueness: AnyUniqueness::OptionalMultipletRole(0usize, usize::MAX),
+                transformer: transform_add_work,
             }
         );
 
@@ -280,11 +267,11 @@ impl GameProvider for KingdomGameProvider {
     }
 
     fn check_if_all_roles_are_described(&self, roles: &BTreeMap<AnyRole, RoleDescription>) -> () {
-        for role in KingdomRole::iter() { 
+        for role in KingdomRole::iter() {
             if !roles.contains_key(&AnyRole::KingdomRole(role.clone())) {
                 panic!("No description (uniqueness and transformer) for this role: {:?}", &role);
             }
-        } 
+        }
     }
 }
 
@@ -297,11 +284,11 @@ impl GameProvider for LotteryGameProvider {
     }
 
     fn check_if_all_roles_are_described(&self, roles: &BTreeMap<AnyRole, RoleDescription>) -> () {
-        // for role in KingdomRole::iter() { 
+        // for role in KingdomRole::iter() {
         //     if !roles.contains_key(&AnyRole::KingdomRole(role.clone())) {
         //         panic!("No description (uniqueness and transformer) for this role: {:?}", &role);
         //     }
-        // } 
+        // }
     }
 }
 
@@ -343,16 +330,16 @@ impl PoolProvider for KingdomPoolProvider {
         if tick % 50 == 0 {
             gamepool.push(LotteryGameProvider.provide_game());
         }
-    }    
-}    
+    }
+}
 
 /// Public interface
 /// Use get_* functions to pass trait-implementing-structs to the main fn.
 
 #[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Hash, Clone, EnumIter)]
-pub enum AnyResource { 
+pub enum AnyResource {
     Coins,
-}    
+}
 
 #[allow(non_camel_case_types)]
 #[derive(Clone, Debug)]
@@ -362,38 +349,17 @@ pub enum AnyAction { // For every Game
     work_action,
     remove_coins_action,
     play_lottery_action,
-}    
+}
 
 #[derive(Clone, Debug)]
 pub enum AnyDecider {
     RngDecider,
-    UtilityComputingDecider 
+    UtilityComputingDecider
 }
 
 #[derive(Clone, Debug)]
 pub enum AnyParticipationChecker {
     TrivialParticipationChecker
-}
-
-#[derive(Clone)]
-pub enum AnyTransformer { 
-    AddMintTransformer,
-    AddWorkTransformer,
-    RemoveCoinsTransformer,
-    LotteryTransformer,
-    _TrivialTransformer,
-}
-
-impl AnyTransformer {
-    pub fn transform(&self, actions: &mut Vec<AnyAction>) {
-        match self {
-            AnyTransformer::AddMintTransformer => AddMintTransformer.transform(actions),
-            AnyTransformer::AddWorkTransformer => AddWorkTransformer.transform(actions),
-            AnyTransformer::_TrivialTransformer => TrivialTransformer.transform(actions),
-            AnyTransformer::RemoveCoinsTransformer => RemoveCoinsTransformer.transform(actions),
-            AnyTransformer::LotteryTransformer => LotteryTransformer.transform(actions),
-        }
-    }
 }
 
 pub fn get_initializer() -> impl AgentInitializer {
@@ -413,7 +379,7 @@ pub enum AnyRole {
     KingdomRole(KingdomRole),
     TheEndRole(TheEndRole),
     LotteryRole(LotteryRole),
-}    
+}
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, EnumIter, Debug)]
 pub enum KingdomRole {

@@ -12,7 +12,7 @@ mod io;
 mod implementation;
 
 use io::*;
-use implementation::{AnyAction, AnyParticipationChecker, AnyDecider, AnyResource, AnyRole, AnyTransformer};
+use implementation::{AnyAction, AnyParticipationChecker, AnyDecider, AnyResource, AnyRole};
 use implementation::{get_initializer, get_pool_provider, get_agent_assigner};
 
 type AgentID = usize;
@@ -39,7 +39,7 @@ pub struct Game {
 #[derive(Clone)]
 pub struct RoleDescription {
     uniqueness: AnyUniqueness,
-    transformer: AnyTransformer,
+    transformer: fn(&mut Vec<AnyAction>),
 }
 
 #[derive(Clone, Debug)]
@@ -50,7 +50,7 @@ pub struct Tile {
 }
 
 #[derive(PartialEq, Clone)]
-pub enum AnyUniqueness { // TODO: make other name, see  Modality 
+pub enum AnyUniqueness { // TODO: make other name, see  Modality
     RequiredMultipletRole(usize, usize), // Contains min required and max possible multiplicity. Should be assigned for game to play
     OptionalMultipletRole(usize, usize), // Contains min required and max possible multiplicity. Can be assigned
 }
@@ -75,7 +75,7 @@ impl Agent {
         }
         total_utility
     }
-    
+
 }
 
 
@@ -85,7 +85,7 @@ impl Tile {
         for (resource, amount) in resources {
             zeroed_resources.insert(resource, amount);
         }
-        
+
         Tile{agents, resources: zeroed_resources, _reputations: reputations}
     }
 }
@@ -107,7 +107,7 @@ pub trait PoolProvider {
     fn provide_all_games(&self, gamepool: &mut Vec<Game>, tick: usize) -> (); // Procedure
 }
 pub trait AgentAssigner {
-    fn assign_and_consume_agents(&self, game: &Game, available_agents: &mut Vec<Agent>) -> Option<BTreeMap<AgentID, AnyRole>>; 
+    fn assign_and_consume_agents(&self, game: &Game, available_agents: &mut Vec<Agent>) -> Option<BTreeMap<AgentID, AnyRole>>;
 }
 
 pub trait AgentInitializer {
@@ -120,17 +120,18 @@ pub trait ParticipationChecker {
 
 pub trait AnyActionIntoInner {
     fn into_inner(self) -> Action;
-}    
+}
 
 
 impl Game {
-    fn prepare_actions(&self, assigned_roles: &BTreeMap<AgentID, AnyRole>, ordered_agents: &Vec<Agent>) -> BTreeMap<AgentID, Vec<AnyAction>> { 
-        let mut transient_actions: BTreeMap<AgentID, Vec<AnyAction>> = BTreeMap::new(); 
-        
+    fn prepare_actions(&self, assigned_roles: &BTreeMap<AgentID, AnyRole>, ordered_agents: &Vec<Agent>) -> BTreeMap<AgentID, Vec<AnyAction>> {
+        let mut transient_actions: BTreeMap<AgentID, Vec<AnyAction>> = BTreeMap::new();
+
         for (id, role) in assigned_roles.iter() {
             let role_description = self.roles.get(role).unwrap();
             let mut cloned_actions = ordered_agents[*id].base_actions.clone();
-            role_description.transformer.transform(&mut cloned_actions);
+            let transformer_fn = role_description.transformer;
+            transformer_fn(&mut cloned_actions);
             transient_actions.insert(*id, cloned_actions);
         }
         transient_actions
@@ -150,7 +151,7 @@ impl Game {
 
             let choosen_action = choosen_decider.decide( immutable_tile, agent_id, actions, &availiable_data, rng).into_inner(); // TODO: Change order of args
             choosen_action(tile, agent_id, rng) // Tile is mutated here
-        } 
+        }
     }
     pub fn create_delayed_consequent_game(delay: usize, game: Game) -> Game {
         if delay == 0 {
@@ -173,7 +174,7 @@ fn main() {
     let log_file_pathname = format!("output/{}.txt", "final_state");
     let plot_file_pathname = format!("output/{}.gif", "resources_distribution");
     let mut root = BitMapBackend::gif(&plot_file_pathname, (640, 480), 100).unwrap().into_drawing_area();
-    
+
     let configs = read_configs();
     let pool_provider = get_pool_provider();
     let agent_assigner = get_agent_assigner();
@@ -181,7 +182,7 @@ fn main() {
     let mut rng = StdRng::seed_from_u64(configs.seed as u64);
     let mut tile = Tile::new(get_initializer().initialize_agents(&configs), BTreeMap::new(), reputations);
     let mut games: Vec<Game> = vec![];
-    
+
     for tick in 0..configs.tick_count {
         let mut consequent_games: Vec<Game> = vec![];
         pool_provider.provide_all_games(&mut games, tick);
