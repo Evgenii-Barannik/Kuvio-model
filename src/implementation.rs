@@ -14,16 +14,16 @@ use std::any::TypeId;
 use super::*;
 struct RngDecider;
 impl ActionDecider for RngDecider {
-    fn decide(&self, _tile: &Tile, _agent_id: AgentID, transient_actions: Vec<AnyAction>, _data: &DecisionAvailableData, rng: &mut StdRng) -> AnyAction {
+    fn decide(&self, _tile: &Tile, _agent_id: AgentID, transient_actions: Vec<ActionFn>, _data: &DecisionAvailableData, rng: &mut StdRng) -> ActionFn {
         let random_index = Uniform::new(0, transient_actions.len()).sample(rng);
         transient_actions[random_index].clone()
     }
 }
 struct UtilityComputingDecider;
 impl ActionDecider for UtilityComputingDecider {
-    fn decide(&self, tile: &Tile, agent_id: AgentID, transient_actions: Vec<AnyAction>, _data: &DecisionAvailableData, rng: &mut StdRng) -> AnyAction {
+    fn decide(&self, tile: &Tile, agent_id: AgentID, transient_actions: Vec<ActionFn>, _data: &DecisionAvailableData, rng: &mut StdRng) -> ActionFn {
         let possible_future_utilities = transient_actions.iter()
-            .map(|action| (*action).clone().into_inner())
+            .map(|action| (*action).clone())
             .map(|f| {
                 let mut tile_clone = tile.clone();
                 f(&mut tile_clone, agent_id, rng);
@@ -42,7 +42,7 @@ impl ActionDecider for UtilityComputingDecider {
 }
 
 impl ActionDecider for AnyDecider {
-    fn decide(&self, tile: &Tile, agent_id: AgentID, transient_actions: Vec<AnyAction>, data: &DecisionAvailableData, rng: &mut StdRng) -> AnyAction {
+    fn decide(&self, tile: &Tile, agent_id: AgentID, transient_actions: Vec<ActionFn>, data: &DecisionAvailableData, rng: &mut StdRng) -> ActionFn {
         match self {
             AnyDecider::RngDecider => {
                 RngDecider.decide(tile, agent_id, transient_actions, data, rng)
@@ -122,12 +122,9 @@ impl AgentAssigner for FirstAvailableAgentAssigner {
 
 
 // How to add a new Action to a Game:
-// 1) Write new Action function (check required signature);
-// 2) Add this Action function to the AnyAction enum;
-// 3) Change AnyAction trait implementation to describe new variant;
-// 4) Add new or change one of the existing Transformers; or add your new Action to the Agent initialization as one of the base_actions (see impl AgentInitializer of some structs).
-// 4B) If you choose to create new Transformer implementing struct, add it to the AnyTransformer enum and change AnyTransformer traits implementation.
-// 4C) Use your Transformer for Game creation. Games are created using methods of GameProvider implementing structs.
+// 1) Write new ActionFn;
+// 2) Add new or change one of the existing TransformerFn's; or add your new ActionFn to the Agent initialization as one of the base_actions (see impl AgentInitializer of some structs).
+// 3) Use your TransformerFn for Game creation. Games are created using methods of GameProvider implementing structs.
 
 
 fn trivial_action(_tile: &mut Tile, _agent_id: AgentID, _rng: &mut StdRng) {} // Action that does nothing
@@ -156,7 +153,7 @@ fn play_lottery_action(tile: &mut Tile, agent_id: AgentID, _rng: &mut StdRng) {
 }
 
 
-fn pay_taxes(tile: &mut Tile, agent_id: AgentID, _rng: &mut StdRng) { // TODO: rename
+fn remove_coins_action(tile: &mut Tile, agent_id: AgentID, _rng: &mut StdRng) { // TODO: rename
     let tax = *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) / 100;
     *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) -= tax;
     *tile.resources.entry(AnyResource::Coins).or_insert(0) += tax;
@@ -174,36 +171,21 @@ fn chance_to_mine_gold(tile: &Tile, difficulty_growth_rate: f64) -> f64 {
     1.0/(initial_difficulty * f64::powi(difficulty_growth_rate, total_gold as i32))
 }
 
-impl AnyActionIntoInner for AnyAction {
-    fn into_inner(self) -> Action {
-        match self {
-            AnyAction::trivial_action => trivial_action,
-            AnyAction::mint_action => mint_action,
-            AnyAction::work_action => work_action,
-            AnyAction::remove_coins_action => pay_taxes,
-            AnyAction::play_lottery_action => play_lottery_action,
-        }
-    }
+fn transformer_play_lottery(actions: &mut Vec<ActionFn>) {
+    actions.push(play_lottery_action)
 }
 
-// fn transform_trivial(_actions: &mut Vec<AnyAction>) {}
-
-fn transform_play_lottery(actions: &mut Vec<AnyAction>) {
-    actions.push(AnyAction::play_lottery_action)
+fn transformer_add_mint(actions: &mut Vec<ActionFn>) {
+    actions.push(mint_action)
 }
 
-fn transform_add_mint(actions: &mut Vec<AnyAction>) {
-    actions.push(AnyAction::mint_action)
+fn transformer_add_work(actions: &mut Vec<ActionFn>) {
+    actions.push(work_action)
 }
 
-fn transform_add_work(actions: &mut Vec<AnyAction>) {
-    actions.push(AnyAction::work_action)
-}
-
-
-fn transform_remove_coins(actions: &mut Vec<AnyAction>) {
+fn transformer_remove_coins(actions: &mut Vec<ActionFn>) {
     actions.clear();
-    actions.push(AnyAction::remove_coins_action);
+    actions.push(remove_coins_action);
 }
 
 lazy_static! {
@@ -211,7 +193,7 @@ lazy_static! {
         let role = AnyRole::TheEndRole(TheEndRole::Anyone);
         let description = RoleDescription {
             uniqueness: AnyUniqueness::RequiredMultipletRole(1, usize::MAX),
-            transformer: transform_remove_coins,
+            transformer: transformer_remove_coins,
         };
 
         Game {
@@ -222,10 +204,9 @@ lazy_static! {
 
     static ref LOTTERY: Game = {
         let role = AnyRole::LotteryRole(LotteryRole::Player);
-
         let description = RoleDescription {
             uniqueness: AnyUniqueness::RequiredMultipletRole(1, usize::MAX),
-            transformer: transform_play_lottery,
+            transformer: transformer_play_lottery,
         };
 
         Game {
@@ -240,7 +221,7 @@ lazy_static! {
             AnyRole::KingdomRole(KingdomRole::King),
             RoleDescription {
                 uniqueness: AnyUniqueness::RequiredMultipletRole(1usize, 1usize),
-                transformer: transform_add_mint,
+                transformer: transformer_add_mint,
             }
         );
 
@@ -248,7 +229,7 @@ lazy_static! {
             AnyRole::KingdomRole(KingdomRole::Peasant),
             RoleDescription {
                 uniqueness: AnyUniqueness::OptionalMultipletRole(0usize, usize::MAX),
-                transformer: transform_add_work,
+                transformer: transformer_add_work,
             }
         );
 
@@ -262,16 +243,18 @@ struct KingdomGameProvider;
 impl GameProvider for KingdomGameProvider {
     fn provide_game(&self) -> Game {
         let game = KINGDOM_GAME.clone();
-        self.check_if_all_roles_are_described(&game.roles); // TODO: Move checks outside impl, check consequent games.
+        self.check_if_all_roles_are_described(&game.roles).unwrap(); // TODO: Move checks outside impl, check consequent games.
         game
     }
 
-    fn check_if_all_roles_are_described(&self, roles: &BTreeMap<AnyRole, RoleDescription>) -> () {
+    fn check_if_all_roles_are_described(&self, roles: &BTreeMap<AnyRole, RoleDescription>) -> Result<(), String> {
         for role in KingdomRole::iter() {
             if !roles.contains_key(&AnyRole::KingdomRole(role.clone())) {
-                panic!("No description (uniqueness and transformer) for this role: {:?}", &role);
+                let e = format!("No description for this role: {:?}", &role);
+                return Err(e);
             }
         }
+        Ok(())
     }
 }
 
@@ -279,16 +262,19 @@ struct LotteryGameProvider;
 impl GameProvider for LotteryGameProvider {
     fn provide_game(&self) -> Game {
         let game = LOTTERY.clone();
-        self.check_if_all_roles_are_described(&game.roles); // TODO: Move checks outside impl, check consequent games.
+        self.check_if_all_roles_are_described(&game.roles).unwrap(); // TODO: Move checks outside impl, check consequent games.
         game
     }
 
-    fn check_if_all_roles_are_described(&self, roles: &BTreeMap<AnyRole, RoleDescription>) -> () {
-        // for role in KingdomRole::iter() {
-        //     if !roles.contains_key(&AnyRole::KingdomRole(role.clone())) {
-        //         panic!("No description (uniqueness and transformer) for this role: {:?}", &role);
-        //     }
-        // }
+
+    fn check_if_all_roles_are_described(&self, roles: &BTreeMap<AnyRole, RoleDescription>) -> Result<(), String> {
+        for role in LotteryRole::iter() {
+            if !roles.contains_key(&AnyRole::LotteryRole(role.clone())) {
+                let e = format!("No description for this role: {:?}", &role);
+                return Err(e);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -308,7 +294,7 @@ impl AgentInitializer for BasicInitializer {
             agents.push(
                 Agent::new(
                     BTreeMap::new(),
-                    vec![AnyAction::trivial_action],
+                    vec![trivial_action],
                     decider,
                     AnyParticipationChecker::TrivialParticipationChecker,
                     i as AgentID,
@@ -333,22 +319,11 @@ impl PoolProvider for KingdomPoolProvider {
     }
 }
 
-/// Public interface
 /// Use get_* functions to pass trait-implementing-structs to the main fn.
 
 #[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Hash, Clone, EnumIter)]
 pub enum AnyResource {
     Coins,
-}
-
-#[allow(non_camel_case_types)]
-#[derive(Clone, Debug)]
-pub enum AnyAction { // For every Game
-    trivial_action,
-    mint_action,
-    work_action,
-    remove_coins_action,
-    play_lottery_action,
 }
 
 #[derive(Clone, Debug)]

@@ -12,19 +12,20 @@ mod io;
 mod implementation;
 
 use io::*;
-use implementation::{AnyAction, AnyParticipationChecker, AnyDecider, AnyResource, AnyRole};
+use implementation::{AnyParticipationChecker, AnyDecider, AnyResource, AnyRole};
 use implementation::{get_initializer, get_pool_provider, get_agent_assigner};
 
 type AgentID = usize;
 type Resources = BTreeMap<AnyResource, usize>;
 type DecisionAvailableData = BTreeMap<AgentID, Resources>;
-type Action = fn(&mut Tile, AgentID, &mut StdRng);
+type ActionFn = fn(&mut Tile, AgentID, &mut StdRng);
+type TransformerFn = fn(&mut Vec<ActionFn>);
 type ReputationMatrix = Vec<Vec<f64>>;
 
 #[derive(Clone, Debug)]
 pub struct Agent {
     resources: Resources,
-    base_actions: Vec<AnyAction>,
+    base_actions: Vec<ActionFn>,
     participation_checker: AnyParticipationChecker,
     decider: AnyDecider,
     id: AgentID,
@@ -39,7 +40,7 @@ pub struct Game {
 #[derive(Clone)]
 pub struct RoleDescription {
     uniqueness: AnyUniqueness,
-    transformer: fn(&mut Vec<AnyAction>),
+    transformer: TransformerFn,
 }
 
 #[derive(Clone, Debug)]
@@ -56,7 +57,7 @@ pub enum AnyUniqueness { // TODO: make other name, see  Modality
 }
 
 impl Agent {
-    fn new(initial_resources: Resources, base_actions: Vec<AnyAction>, decider: AnyDecider, participation_checker: AnyParticipationChecker, id: AgentID) -> Agent {
+    fn new(initial_resources: Resources, base_actions: Vec<ActionFn>, decider: AnyDecider, participation_checker: AnyParticipationChecker, id: AgentID) -> Agent {
         let mut zeroed_resources = AnyResource::iter().map(|r| (r, 0)).collect::<Resources>();
         for (resource, amount) in initial_resources {
             zeroed_resources.insert(resource, amount);
@@ -91,20 +92,20 @@ impl Tile {
 }
 
 pub trait ActionDecider {
-    fn decide(&self, tile: &Tile, agent_id: AgentID, transient_actions: Vec<AnyAction>, _data: &DecisionAvailableData, _rng: &mut StdRng) -> AnyAction;
+    fn decide(&self, tile: &Tile, agent_id: AgentID, transient_actions: Vec<ActionFn>, _data: &DecisionAvailableData, _rng: &mut StdRng) -> ActionFn;
 }
 
 pub trait ActionTransformer {
-    fn transform(&self, base_actions: &mut Vec<AnyAction>) -> (); //Procedure
+    fn transform(&self, base_actions: &mut Vec<ActionFn>) -> ();
 }
 
 pub trait GameProvider {
     fn provide_game(&self) -> Game;
-    fn check_if_all_roles_are_described(&self, roles: &BTreeMap<AnyRole, RoleDescription>) -> (); // Can panic
+    fn check_if_all_roles_are_described(&self, roles: &BTreeMap<AnyRole, RoleDescription>) -> Result<(), String>;
 }
 
 pub trait PoolProvider {
-    fn provide_all_games(&self, gamepool: &mut Vec<Game>, tick: usize) -> (); // Procedure
+    fn provide_all_games(&self, gamepool: &mut Vec<Game>, tick: usize);
 }
 pub trait AgentAssigner {
     fn assign_and_consume_agents(&self, game: &Game, available_agents: &mut Vec<Agent>) -> Option<BTreeMap<AgentID, AnyRole>>;
@@ -118,14 +119,9 @@ pub trait ParticipationChecker {
     fn check_if_agent_participates(&self, agent: &Agent, game: &Game, _proposed_role: &AnyRole) -> bool;
 }
 
-pub trait AnyActionIntoInner {
-    fn into_inner(self) -> Action;
-}
-
-
 impl Game {
-    fn prepare_actions(&self, assigned_roles: &BTreeMap<AgentID, AnyRole>, ordered_agents: &Vec<Agent>) -> BTreeMap<AgentID, Vec<AnyAction>> {
-        let mut transient_actions: BTreeMap<AgentID, Vec<AnyAction>> = BTreeMap::new();
+    fn prepare_actions(&self, assigned_roles: &BTreeMap<AgentID, AnyRole>, ordered_agents: &Vec<Agent>) -> BTreeMap<AgentID, Vec<ActionFn>> {
+        let mut transient_actions: BTreeMap<AgentID, Vec<ActionFn>> = BTreeMap::new();
 
         for (id, role) in assigned_roles.iter() {
             let role_description = self.roles.get(role).unwrap();
@@ -149,7 +145,7 @@ impl Game {
                 .map(|agent| (agent.id, agent.resources.clone()))
                 .collect();
 
-            let choosen_action = choosen_decider.decide( immutable_tile, agent_id, actions, &availiable_data, rng).into_inner(); // TODO: Change order of args
+            let choosen_action = choosen_decider.decide(immutable_tile, agent_id, actions, &availiable_data, rng); // TODO: Change order of args
             choosen_action(tile, agent_id, rng) // Tile is mutated here
         }
     }
