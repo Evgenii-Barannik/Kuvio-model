@@ -12,16 +12,24 @@ use lazy_static::lazy_static;
 use std::any::TypeId;
 
 use super::*;
-struct RngDecider;
-impl ActionDecider for RngDecider {
-    fn decide(&self, _tile: &Tile, _agent_id: AgentID, transient_actions: Vec<ActionFn>, _data: &DecisionAvailableData, rng: &mut StdRng) -> ActionFn {
-        let random_index = Uniform::new(0, transient_actions.len()).sample(rng);
-        transient_actions[random_index].clone()
+
+trait ExtendedWith<T> {
+    fn extended_with(self, new_element: T) -> Self;
+}
+
+impl<T> ExtendedWith<T> for Vec<T> {
+    fn extended_with(mut self, new_element: T) -> Self {
+        self.push(new_element);
+        self
     }
 }
-struct UtilityComputingDecider;
-impl ActionDecider for UtilityComputingDecider {
-    fn decide(&self, tile: &Tile, agent_id: AgentID, transient_actions: Vec<ActionFn>, _data: &DecisionAvailableData, rng: &mut StdRng) -> ActionFn {
+
+fn rng_decider(_tile: &Tile, _agent_id: AgentID, transient_actions: Vec<ActionFn>, _data: &DecisionAvailableData, rng: &mut StdRng) -> ActionFn {
+    let random_index = Uniform::new(0, transient_actions.len()).sample(rng);
+    transient_actions[random_index].clone()
+}
+
+fn utility_decider(tile: &Tile, agent_id: AgentID, transient_actions: Vec<ActionFn>, _data: &DecisionAvailableData, rng: &mut StdRng) -> ActionFn {
         let possible_future_utilities = transient_actions.iter()
             .map(|action| (*action).clone())
             .map(|f| {
@@ -38,100 +46,66 @@ impl ActionDecider for UtilityComputingDecider {
             .unwrap();
 
         transient_actions[choosen_index].clone()
-    }
 }
 
-impl ActionDecider for AnyDecider {
-    fn decide(&self, tile: &Tile, agent_id: AgentID, transient_actions: Vec<ActionFn>, data: &DecisionAvailableData, rng: &mut StdRng) -> ActionFn {
-        match self {
-            AnyDecider::RngDecider => {
-                RngDecider.decide(tile, agent_id, transient_actions, data, rng)
-            }
-            AnyDecider::UtilityComputingDecider => {
-                UtilityComputingDecider.decide (tile, agent_id, transient_actions, data, rng)
-            }
+fn trivial_participation_checker(_agent: &Agent, _game: &Game, _proposed_role: &AnyRole) -> bool {
+    true
+}
+
+fn assign_and_consume_agents(game: &Game, available_agents: &mut Vec<Agent>) -> Option<BTreeMap<AgentID, AnyRole>> {
+    let mut assigned_agents: BTreeMap<AgentID, AnyRole> = BTreeMap::new();
+    let all_roles = game.roles.clone().into_iter()
+    .map(|(role, description)| {
+        match description.uniqueness {
+            AnyUniqueness::RequiredMultipletRole(min, max) =>
+            (AnyUniqueness::RequiredMultipletRole.type_id(), role as AnyRole, min, max),
+            AnyUniqueness::OptionalMultipletRole(min, max) =>
+            (AnyUniqueness::OptionalMultipletRole.type_id(), role as AnyRole, min, max)
         }
-    }
-}
+    })
+    .collect::<Vec<(TypeId, AnyRole, usize, usize)>>();
 
+for (typeid, role, min_multiplicity, max_multiplicity) in all_roles.iter() {
+    assert!(*max_multiplicity > 0usize); // TODO: Move to the init phase?
+    assert!(max_multiplicity >= min_multiplicity); // TODO: Move to the init phase?
+    let mut multiplicity_remaining = max_multiplicity.clone();
+    let mut agents_to_consume: Vec<AgentID> = vec![];
+    let mut suggested_agents: BTreeMap<AgentID, AnyRole> = BTreeMap::new();
 
-struct TrivialParticipationChecker;
-impl ParticipationChecker for TrivialParticipationChecker {
-    fn check_if_agent_participates(&self, _agent: &Agent, _game: &Game, _proposed_role: &AnyRole) -> bool {
-        true
-    }
-}
+        'agent_loop: for agent in available_agents.iter() {
+            if (agent.participation_checker)(agent, game, role) {
+                suggested_agents.insert(agent.id, role.to_owned());
+                agents_to_consume.push(agent.id);
 
-impl ParticipationChecker for AnyParticipationChecker {
-    fn check_if_agent_participates(&self, agent: &Agent, game: &Game, _proposed_role: &AnyRole) -> bool {
-        match self {
-            &AnyParticipationChecker::TrivialParticipationChecker => {
-                TrivialParticipationChecker.check_if_agent_participates(agent, game, _proposed_role)
-            }
-        }
-    }
-}
-
-struct FirstAvailableAgentAssigner;
-impl AgentAssigner for FirstAvailableAgentAssigner {
-    fn assign_and_consume_agents(&self, game: &Game, available_agents: &mut Vec<Agent>) -> Option<BTreeMap<AgentID, AnyRole>> {
-        let mut assigned_agents: BTreeMap<AgentID, AnyRole> = BTreeMap::new();
-        let all_roles = game.roles.clone().into_iter()
-        .map(|(role, description)| {
-            match description.uniqueness {
-                AnyUniqueness::RequiredMultipletRole(min, max) =>
-                (AnyUniqueness::RequiredMultipletRole.type_id(), role as AnyRole, min, max),
-                AnyUniqueness::OptionalMultipletRole(min, max) =>
-                (AnyUniqueness::OptionalMultipletRole.type_id(), role as AnyRole, min, max)
-            }
-        })
-        .collect::<Vec<(TypeId, AnyRole, usize, usize)>>();
-
-    for (typeid, role, min_multiplicity, max_multiplicity) in all_roles.iter() {
-        assert!(*max_multiplicity > 0usize); // TODO: Move to the init phase?
-        assert!(max_multiplicity >= min_multiplicity); // TODO: Move to the init phase?
-        let mut multiplicity_remaining = max_multiplicity.clone();
-        let mut agents_to_consume: Vec<AgentID> = vec![];
-        let mut suggested_agents: BTreeMap<AgentID, AnyRole> = BTreeMap::new();
-
-            'agent_loop: for agent in available_agents.iter() {
-                if agent.participation_checker.check_if_agent_participates(agent, game, role) {
-                    suggested_agents.insert(agent.id, role.to_owned());
-                    agents_to_consume.push(agent.id);
-
-                    multiplicity_remaining -= 1;
-                    if multiplicity_remaining == 0 {
-                        break 'agent_loop
-                    }
+                multiplicity_remaining -= 1;
+                if multiplicity_remaining == 0 {
+                    break 'agent_loop
                 }
             }
-            if agents_to_consume.len() >= *min_multiplicity {
-                available_agents.retain(|agent| !agents_to_consume.contains(&agent.id));
-                assigned_agents.append(&mut suggested_agents);
-            } else {
-                if typeid == &AnyUniqueness::RequiredMultipletRole.type_id() {
-                    return None; // Assignment to one required role failed, so the game will not be played.
-                }
-            };
         }
-
-        Some(assigned_agents)
-
+        if agents_to_consume.len() >= *min_multiplicity {
+            available_agents.retain(|agent| !agents_to_consume.contains(&agent.id));
+            assigned_agents.append(&mut suggested_agents);
+        } else {
+            if typeid == &AnyUniqueness::RequiredMultipletRole.type_id() {
+                return None; // Assignment to required role have failed, so the game will not be played.
+            }
+        };
     }
+
+    Some(assigned_agents)
 }
 
-
-// How to add a new Action to a Game:
-// 1) Write new ActionFn;
-// 2) Add new or change one of the existing TransformerFn's; or add your new ActionFn to the Agent initialization as one of the base_actions (see impl AgentInitializer of some structs).
-// 3) Use your TransformerFn for Game creation. Games are created using methods of GameProvider implementing structs.
-
+// How to add a new ActionFn to a Game:
+// 1) Write your ActionFn;
+// 2a) You can add your ActionFn to Agent initialization as one of the base_actions.
+// 2b) You can also use ActionFn in a transformer (for roles specified on game creation).
 
 fn trivial_action(_tile: &mut Tile, _agent_id: AgentID, _rng: &mut StdRng) {} // Action that does nothing
 
 fn mint_action(tile: &mut Tile, agent_id: AgentID, rng: &mut StdRng) {
     let difficulty_growth_rate = 1.0001;
-    let probability_of_success = chance_to_mine_gold(&tile, difficulty_growth_rate); // TODO: rename
+    let probability_of_success = chance_to_mint_gold(&tile, difficulty_growth_rate);
 
     if rng.gen_bool(probability_of_success) {
         *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) += 10;
@@ -153,13 +127,13 @@ fn play_lottery_action(tile: &mut Tile, agent_id: AgentID, _rng: &mut StdRng) {
 }
 
 
-fn remove_coins_action(tile: &mut Tile, agent_id: AgentID, _rng: &mut StdRng) { // TODO: rename
+fn pay_tax_action(tile: &mut Tile, agent_id: AgentID, _rng: &mut StdRng) {
     let tax = *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) / 100;
     *tile.agents[agent_id].resources.entry(AnyResource::Coins).or_insert(0) -= tax;
     *tile.resources.entry(AnyResource::Coins).or_insert(0) += tax;
 }
 
-fn chance_to_mine_gold(tile: &Tile, difficulty_growth_rate: f64) -> f64 {
+fn chance_to_mint_gold(tile: &Tile, difficulty_growth_rate: f64) -> f64 {
     let agents_gold =tile.agents
     .iter()
     .map(|agent|agent.resources.get(&AnyResource::Coins).unwrap_or(&0))
@@ -171,29 +145,12 @@ fn chance_to_mine_gold(tile: &Tile, difficulty_growth_rate: f64) -> f64 {
     1.0/(initial_difficulty * f64::powi(difficulty_growth_rate, total_gold as i32))
 }
 
-fn transformer_play_lottery(actions: &mut Vec<ActionFn>) {
-    actions.push(play_lottery_action)
-}
-
-fn transformer_add_mint(actions: &mut Vec<ActionFn>) {
-    actions.push(mint_action)
-}
-
-fn transformer_add_work(actions: &mut Vec<ActionFn>) {
-    actions.push(work_action)
-}
-
-fn transformer_remove_coins(actions: &mut Vec<ActionFn>) {
-    actions.clear();
-    actions.push(remove_coins_action);
-}
-
 lazy_static! {
     static ref THE_END_GAME: Game = {
         let role = AnyRole::TheEndRole(TheEndRole::Anyone);
         let description = RoleDescription {
             uniqueness: AnyUniqueness::RequiredMultipletRole(1, usize::MAX),
-            transformer: transformer_remove_coins,
+            transformer: |_actions| {vec![pay_tax_action]},
         };
 
         Game {
@@ -206,7 +163,7 @@ lazy_static! {
         let role = AnyRole::LotteryRole(LotteryRole::Player);
         let description = RoleDescription {
             uniqueness: AnyUniqueness::RequiredMultipletRole(1, usize::MAX),
-            transformer: transformer_play_lottery,
+            transformer: |actions| {actions.extended_with(play_lottery_action)},
         };
 
         Game {
@@ -221,7 +178,7 @@ lazy_static! {
             AnyRole::KingdomRole(KingdomRole::King),
             RoleDescription {
                 uniqueness: AnyUniqueness::RequiredMultipletRole(1usize, 1usize),
-                transformer: transformer_add_mint,
+                transformer: |actions| {actions.extended_with(mint_action)},
             }
         );
 
@@ -229,7 +186,7 @@ lazy_static! {
             AnyRole::KingdomRole(KingdomRole::Peasant),
             RoleDescription {
                 uniqueness: AnyUniqueness::OptionalMultipletRole(0usize, usize::MAX),
-                transformer: transformer_add_work,
+                transformer: |actions| {actions.extended_with(work_action)},
             }
         );
 
@@ -278,44 +235,37 @@ impl GameProvider for LotteryGameProvider {
     }
 }
 
-struct BasicInitializer;
-impl AgentInitializer for BasicInitializer {
-    fn initialize_agents(&self, configs: &Configs) -> Vec<Agent> {
-        let mut agents = vec![];
+fn initialize_agents(configs: &Configs) -> Vec<Agent> {
+    let mut agents = vec![];
 
-        let border_index = configs.agent_count / 10;
-        for i in 0..configs.agent_count {
-            let decider = if i < border_index {
-                AnyDecider::UtilityComputingDecider
-            } else {
-                AnyDecider::RngDecider
-            };
+    let border_index = configs.agent_count / 10;
+    for i in 0..configs.agent_count {
+        let decider = if i < border_index {
+            utility_decider
+        } else {
+            rng_decider
+        };
 
-            agents.push(
-                Agent::new(
-                    BTreeMap::new(),
-                    vec![trivial_action],
-                    decider,
-                    AnyParticipationChecker::TrivialParticipationChecker,
-                    i as AgentID,
-                )
-            );
-        }
-
-        agents
-
+        agents.push(
+            Agent::new(
+                BTreeMap::new(),
+                vec![trivial_action],
+                decider,
+                trivial_participation_checker,
+                i as AgentID,
+            )
+        );
     }
+
+    agents
 }
 
-struct KingdomPoolProvider;
-impl PoolProvider for KingdomPoolProvider {
-    fn provide_all_games(&self, gamepool: &mut Vec<Game>, tick: usize) -> () {
-        if tick % 3 == 0 {
-            gamepool.push(KingdomGameProvider.provide_game());
-        }
-        if tick % 50 == 0 {
-            gamepool.push(LotteryGameProvider.provide_game());
-        }
+fn provide_all_games(gamepool: &mut Vec<Game>, tick: usize) -> () {
+    if tick % 3 == 0 {
+        gamepool.push(KingdomGameProvider.provide_game());
+    }
+    if tick % 50 == 0 {
+        gamepool.push(LotteryGameProvider.provide_game());
     }
 }
 
@@ -326,27 +276,16 @@ pub enum AnyResource {
     Coins,
 }
 
-#[derive(Clone, Debug)]
-pub enum AnyDecider {
-    RngDecider,
-    UtilityComputingDecider
+pub fn get_initializer() -> AgentInitializerFn {
+    initialize_agents
 }
 
-#[derive(Clone, Debug)]
-pub enum AnyParticipationChecker {
-    TrivialParticipationChecker
+pub fn get_agent_assigner() -> AgentAssignerFn {
+    assign_and_consume_agents
 }
 
-pub fn get_initializer() -> impl AgentInitializer {
-    BasicInitializer
-}
-
-pub fn get_agent_assigner() -> impl AgentAssigner {
-    FirstAvailableAgentAssigner
-}
-
-pub fn get_pool_provider() -> impl PoolProvider {
-    KingdomPoolProvider
+pub fn get_pool_provider() -> PoolProviderFn {
+    provide_all_games
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
